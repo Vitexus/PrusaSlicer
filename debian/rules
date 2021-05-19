@@ -1,0 +1,26 @@
+#!/usr/bin/make -f
+# You must remove unused comment lines for the released package.
+export DH_VERBOSE = 1
+#export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+#export DEB_CFLAGS_MAINT_APPEND  = -Wall -pedantic
+#export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
+
+#In the next step, you need to build the PrusaSlicer C++ library.
+#1) Create a build directory and change to it
+#2) run cmake .. -DCMAKE_BUILD_TYPE=Release
+#3) run make
+#4) to execute the automatic tests, run ctest --verbose
+
+
+
+
+%:
+	dh $@  
+
+override_dh_auto_configure:
+	dh_auto_configure --
+	cmake -DCMAKE_INSTALL_PREFIX=/usr -DFORCE_INSRC_BUILD=ON -DCMAKE_BUILD_TYPE="Package" -DENABLE_LYD_PRIV=ON -DGEN_LANGUAGE_BINDINGS=ON -DGEN_PYTHON_BINDINGS=OFF -DCMAKE_LIBRARY_ARCHITECTURE="$(DEB_TARGET_MULTIARCH)" -DTBBROOT=/usr -Dcereal_DIR=/usr
+
+
+override_dh_auto_test:
+	: # do nothing

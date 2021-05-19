@@ -1,26 +1,34 @@
 set(_q "")
-if(${CMAKE_FIND_PACKAGE_NAME}_FIND_QUIETLY)
-    set(_q QUIET)
-    set(_quietly TRUE)
-endif()
-find_package(${CMAKE_FIND_PACKAGE_NAME} ${${CMAKE_FIND_PACKAGE_NAME}_FIND_VERSION} CONFIG ${_q})
 
-if (NOT ${CMAKE_FIND_PACKAGE_NAME}_FOUND)
-    # Fall-back solution to find the Cereal serialization library header file
-    include(CheckIncludeFileCXX)
-    add_library(cereal INTERFACE)
-    target_include_directories(cereal INTERFACE include)
+#set(CMAKE_REQUIRED_INCLUDES "/usr/include/" )
+#message(${CMAKE_REQUIRED_INCLUDES})
+#message("CMAKE_FIND_PACKAGE_NAME" ${CMAKE_FIND_PACKAGE_NAME})
+#message("_FIND_VERSION" ${${CMAKE_FIND_PACKAGE_NAME}_FIND_VERSION} )
+#find_package(${CMAKE_FIND_PACKAGE_NAME})
+#message(${CMAKE_FIND_PACKAGE_NAME}_FOUND)
+#/usr/include/cereal/cereal.hpp
 
-    if (_quietly)
-        set(CMAKE_REQUIRED_QUIET ON)
-    endif()
-    CHECK_INCLUDE_FILE_CXX("cereal/cereal.hpp" HAVE_CEREAL_H)
 
-    if (NOT HAVE_CEREAL_H)
-        if (${CMAKE_FIND_PACKAGE_NAME}_FIND_REQUIRED)
-            message(FATAL_ERROR "Cereal library not found. Please install the dependency.")
-        elseif(NOT _quietly)
-            message(WARNING "Cereal library not found.")
-        endif()
-    endif ()
-endif()
+###############################################################################
+# Find Cereal
+#
+# This sets the following variables:
+# CEREAL_FOUND - True if Cereal was found.
+# CEREAL_INCLUDE_DIRS - Directories containing the Cereal include files.
+# CEREAL_DEFINITIONS - Compiler flags for Cereal.
+
+find_path(CEREAL_INCLUDE_DIR cereal
+        HINTS "${CEREAL_ROOT}/include" "$ENV{CEREAL_ROOT}/include" "/usr/include" "$ENV{PROGRAMFILES}/cereal/include" "cereal/include")
+
+set(CEREAL_INCLUDE_DIRS ${CEREAL_INCLUDE_DIR})
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(Cereal DEFAULT_MSG CEREAL_INCLUDE_DIR)
+
+mark_as_advanced(CEREAL_INCLUDE_DIR)
+
+if(CEREAL_FOUND)
+    message(STATUS "Cereal found (include: ${CEREAL_INCLUDE_DIRS})")
+endif(CEREAL_FOUND)
+
+
