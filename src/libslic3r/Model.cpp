@@ -3,6 +3,7 @@
 #include "ModelArrange.hpp"
 #include "Geometry.hpp"
 #include "MTUtils.hpp"
+#include "TriangleMeshSlicer.hpp"
 #include "TriangleSelector.hpp"
 
 #include "Format/AMF.hpp"
@@ -893,6 +894,30 @@ Polygon ModelObject::convex_hull_2d(const Transform3d &trafo_instance) const
     Points pts;
     for (const ModelVolume *v : this->volumes)
         if (v->is_model_part()) {
+#if ENABLE_ALLOW_NEGATIVE_Z
+            const Transform3d trafo = trafo_instance * v->get_matrix();
+            const TriangleMesh& hull_3d = v->get_convex_hull();
+            const indexed_triangle_set& its = hull_3d.its;
+            if (its.vertices.empty()) {
+                // Using the STL faces.
+                const stl_file& stl = hull_3d.stl;
+                for (const stl_facet& facet : stl.facet_start) {
+                    for (size_t j = 0; j < 3; ++j) {
+                        const Vec3d p = trafo * facet.vertex[j].cast<double>();
+                        if (p.z() >= 0.0)
+                            pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
+                    }
+                }
+            }
+            else {
+                // Using the shared vertices should be a bit quicker than using the STL faces.
+                for (size_t i = 0; i < its.vertices.size(); ++i) {
+                    const Vec3d p = trafo * its.vertices[i].cast<double>();
+                    if (p.z() >= 0.0)
+                        pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
+                }
+            }
+#else
             Transform3d trafo = trafo_instance * v->get_matrix();
 			const indexed_triangle_set &its = v->mesh().its;
 			if (its.vertices.empty()) {
@@ -901,21 +926,16 @@ Polygon ModelObject::convex_hull_2d(const Transform3d &trafo_instance) const
 				for (const stl_facet &facet : stl.facet_start)
                     for (size_t j = 0; j < 3; ++ j) {
                         Vec3d p = trafo * facet.vertex[j].cast<double>();
-#if ENABLE_ALLOW_NEGATIVE_Z
-                        if (p.z() >= 0.0)
-#endif // ENABLE_ALLOW_NEGATIVE_Z
                             pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
                     }
             } else {
                 // Using the shared vertices should be a bit quicker than using the STL faces.
                 for (size_t i = 0; i < its.vertices.size(); ++ i) {
                     Vec3d p = trafo * its.vertices[i].cast<double>();
-#if ENABLE_ALLOW_NEGATIVE_Z
-                    if (p.z() >= 0.0)
-#endif // ENABLE_ALLOW_NEGATIVE_Z
                         pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
                 }
             }
+#endif // ENABLE_ALLOW_NEGATIVE_Z
         }
     std::sort(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) < b(0) || (a(0) == b(0) && a(1) < b(1)); });
     pts.erase(std::unique(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) == b(0) && a(1) == b(1); }), pts.end());
@@ -1193,32 +1213,32 @@ ModelObjectPtrs ModelObject::cut(size_t instance, coordf_t z, bool keep_upper, b
         }
         else if (! volume->mesh().empty()) {
             
-            TriangleMesh upper_mesh, lower_mesh;
-
             // Transform the mesh by the combined transformation matrix.
             // Flip the triangles in case the composite transformation is left handed.
 			TriangleMesh mesh(volume->mesh());
 			mesh.transform(instance_matrix * volume_matrix, true);
 			volume->reset_mesh();
-            
-            mesh.require_shared_vertices();
-            
-            // Perform cut
-            TriangleMeshSlicer tms(&mesh);
-            tms.cut(float(z), &upper_mesh, &lower_mesh);
-
             // Reset volume transformation except for offset
             const Vec3d offset = volume->get_offset();
             volume->set_transformation(Geometry::Transformation());
             volume->set_offset(offset);
 
-            if (keep_upper) {
-                upper_mesh.repair();
-                upper_mesh.reset_repair_stats();
-            }
-            if (keep_lower) {
-                lower_mesh.repair();
-                lower_mesh.reset_repair_stats();
+            // Perform cut
+            TriangleMesh upper_mesh, lower_mesh;
+            {
+                indexed_triangle_set upper_its, lower_its;
+                mesh.require_shared_vertices();
+                cut_mesh(mesh.its, float(z), &upper_its, &lower_its);
+                if (keep_upper) {
+                    upper_mesh = TriangleMesh(upper_its);
+                    upper_mesh.repair();
+                    upper_mesh.reset_repair_stats();
+                }
+                if (keep_lower) {
+                    lower_mesh = TriangleMesh(lower_its);
+                    lower_mesh.repair();
+                    lower_mesh.reset_repair_stats();
+                }
             }
 
             if (keep_upper && upper_mesh.facets_count() > 0) {
@@ -1906,12 +1926,19 @@ arrangement::ArrangePolygon ModelInstance::get_arrange_polygon() const
     Vec3d rotation = get_rotation();
     rotation.z()   = 0.;
     Transform3d trafo_instance =
+#if ENABLE_ALLOW_NEGATIVE_Z
+        Geometry::assemble_transform(get_offset().z() * Vec3d::UnitZ(), rotation,
+                                     get_scaling_factor(), get_mirror());
+#else
         Geometry::assemble_transform(Vec3d::Zero(), rotation,
                                      get_scaling_factor(), get_mirror());
+#endif // ENABLE_ALLOW_NEGATIVE_Z
 
     Polygon p = get_object()->convex_hull_2d(trafo_instance);
 
+#if !ENABLE_ALLOW_NEGATIVE_Z
     assert(!p.points.empty());
+#endif // !ENABLE_ALLOW_NEGATIVE_Z
 
 //    if (!p.points.empty()) {
 //        Polygons pp{p};
