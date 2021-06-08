@@ -1,3 +1,4 @@
+#include "libslic3r.h"
 #include "Exception.hpp"
 #include "Model.hpp"
 #include "ModelArrange.hpp"
@@ -560,7 +561,7 @@ ModelObject& ModelObject::assign_copy(const ModelObject &rhs)
     this->sla_support_points          = rhs.sla_support_points;
     this->sla_points_status           = rhs.sla_points_status;
     this->sla_drain_holes             = rhs.sla_drain_holes;
-    this->layer_config_ranges         = rhs.layer_config_ranges;    // #ys_FIXME_experiment
+    this->layer_config_ranges         = rhs.layer_config_ranges;
     this->layer_height_profile        = rhs.layer_height_profile;
     this->printable                   = rhs.printable;
     this->origin_translation          = rhs.origin_translation;
@@ -601,7 +602,7 @@ ModelObject& ModelObject::assign_copy(ModelObject &&rhs)
     this->sla_support_points          = std::move(rhs.sla_support_points);
     this->sla_points_status           = std::move(rhs.sla_points_status);
     this->sla_drain_holes             = std::move(rhs.sla_drain_holes);
-    this->layer_config_ranges         = std::move(rhs.layer_config_ranges); // #ys_FIXME_experiment
+    this->layer_config_ranges         = std::move(rhs.layer_config_ranges);
     this->layer_height_profile        = std::move(rhs.layer_height_profile);
     this->origin_translation          = std::move(rhs.origin_translation);
     m_bounding_box                    = std::move(rhs.m_bounding_box);
@@ -651,18 +652,20 @@ ModelVolume* ModelObject::add_volume(const TriangleMesh &mesh)
     return v;
 }
 
-ModelVolume* ModelObject::add_volume(TriangleMesh &&mesh)
+ModelVolume* ModelObject::add_volume(TriangleMesh &&mesh, ModelVolumeType type /*= ModelVolumeType::MODEL_PART*/)
 {
-    ModelVolume* v = new ModelVolume(this, std::move(mesh));
+    ModelVolume* v = new ModelVolume(this, std::move(mesh), type);
     this->volumes.push_back(v);
     v->center_geometry_after_creation();
     this->invalidate_bounding_box();
     return v;
 }
 
-ModelVolume* ModelObject::add_volume(const ModelVolume &other)
+ModelVolume* ModelObject::add_volume(const ModelVolume &other, ModelVolumeType type /*= ModelVolumeType::INVALID*/)
 {
     ModelVolume* v = new ModelVolume(this, other);
+    if (type != ModelVolumeType::INVALID && v->type() != type)
+        v->set_type(type);
     this->volumes.push_back(v);
 	// The volume should already be centered at this point of time when copying shared pointers of the triangle mesh and convex hull.
 //	v->center_geometry_after_creation();
@@ -710,6 +713,22 @@ void ModelObject::clear_volumes()
         delete v;
     this->volumes.clear();
     this->invalidate_bounding_box();
+}
+
+void ModelObject::sort_volumes(bool full_sort)
+{
+    // sort volumes inside the object to order "Model Part, Negative Volume, Modifier, Support Blocker and Support Enforcer. "
+    if (full_sort)
+        std::stable_sort(volumes.begin(), volumes.end(), [](ModelVolume* vl, ModelVolume* vr) {
+            return vl->type() < vr->type();
+        });
+    // sort have to controll "place" of the support blockers/enforcers. But one of the model parts have to be on the first place.
+    else
+        std::stable_sort(volumes.begin(), volumes.end(), [](ModelVolume* vl, ModelVolume* vr) {
+            ModelVolumeType vl_type = vl->type() > ModelVolumeType::PARAMETER_MODIFIER ? vl->type() : ModelVolumeType::PARAMETER_MODIFIER;
+            ModelVolumeType vr_type = vr->type() > ModelVolumeType::PARAMETER_MODIFIER ? vr->type() : ModelVolumeType::PARAMETER_MODIFIER;
+            return vl_type < vr_type;
+        });
 }
 
 ModelInstance* ModelObject::add_instance()
@@ -889,35 +908,22 @@ BoundingBoxf3 ModelObject::instance_bounding_box(size_t instance_idx, bool dont_
 // Calculate 2D convex hull of of a projection of the transformed printable volumes into the XY plane.
 // This method is cheap in that it does not make any unnecessary copy of the volume meshes.
 // This method is used by the auto arrange function.
+#if ENABLE_ALLOW_NEGATIVE_Z
+Polygon ModelObject::convex_hull_2d(const Transform3d& trafo_instance) const
+{
+    Points pts;
+    for (const ModelVolume* v : volumes) {
+        if (v->is_model_part())
+            append(pts, its_convex_hull_2d_above(v->mesh().its, (trafo_instance * v->get_matrix()).cast<float>(), 0.0f).points);
+    }
+    return Geometry::convex_hull(std::move(pts));
+}
+#else
 Polygon ModelObject::convex_hull_2d(const Transform3d &trafo_instance) const
 {
     Points pts;
     for (const ModelVolume *v : this->volumes)
         if (v->is_model_part()) {
-#if ENABLE_ALLOW_NEGATIVE_Z
-            const Transform3d trafo = trafo_instance * v->get_matrix();
-            const TriangleMesh& hull_3d = v->get_convex_hull();
-            const indexed_triangle_set& its = hull_3d.its;
-            if (its.vertices.empty()) {
-                // Using the STL faces.
-                const stl_file& stl = hull_3d.stl;
-                for (const stl_facet& facet : stl.facet_start) {
-                    for (size_t j = 0; j < 3; ++j) {
-                        const Vec3d p = trafo * facet.vertex[j].cast<double>();
-                        if (p.z() >= 0.0)
-                            pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
-                    }
-                }
-            }
-            else {
-                // Using the shared vertices should be a bit quicker than using the STL faces.
-                for (size_t i = 0; i < its.vertices.size(); ++i) {
-                    const Vec3d p = trafo * its.vertices[i].cast<double>();
-                    if (p.z() >= 0.0)
-                        pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
-                }
-            }
-#else
             Transform3d trafo = trafo_instance * v->get_matrix();
 			const indexed_triangle_set &its = v->mesh().its;
 			if (its.vertices.empty()) {
@@ -935,34 +941,10 @@ Polygon ModelObject::convex_hull_2d(const Transform3d &trafo_instance) const
                         pts.emplace_back(coord_t(scale_(p.x())), coord_t(scale_(p.y())));
                 }
             }
-#endif // ENABLE_ALLOW_NEGATIVE_Z
         }
-    std::sort(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) < b(0) || (a(0) == b(0) && a(1) < b(1)); });
-    pts.erase(std::unique(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) == b(0) && a(1) == b(1); }), pts.end());
-
-    Polygon hull;
-    int n = (int)pts.size();
-    if (n >= 3) {
-        int k = 0;
-        hull.points.resize(2 * n);
-        // Build lower hull
-        for (int i = 0; i < n; ++ i) {
-            while (k >= 2 && pts[i].ccw(hull[k-2], hull[k-1]) <= 0)
-                -- k;
-            hull[k ++] = pts[i];
-        }
-        // Build upper hull
-        for (int i = n-2, t = k+1; i >= 0; i--) {
-            while (k >= t && pts[i].ccw(hull[k-2], hull[k-1]) <= 0)
-                -- k;
-            hull[k ++] = pts[i];
-        }
-        hull.points.resize(k);
-        assert(hull.points.front() == hull.points.back());
-        hull.points.pop_back();
-    }
-    return hull;
+    return Geometry::convex_hull(std::move(pts));
 }
+#endif // ENABLE_ALLOW_NEGATIVE_Z
 
 void ModelObject::center_around_origin(bool include_modifiers)
 {
@@ -981,7 +963,7 @@ void ModelObject::center_around_origin(bool include_modifiers)
 void ModelObject::ensure_on_bed(bool allow_negative_z)
 {
     const double min_z = get_min_z();
-    if (!allow_negative_z || min_z > 0.0)
+    if (!allow_negative_z || min_z > SINKING_Z_THRESHOLD)
         translate_instances({ 0.0, 0.0, -min_z });
 }
 #else
@@ -1100,6 +1082,7 @@ void ModelObject::convert_units(ModelObjectPtrs& new_objects, ConversionType con
 
             vol->supported_facets.assign(volume->supported_facets);
             vol->seam_facets.assign(volume->seam_facets);
+            vol->mmu_segmentation_facets.assign(volume->mmu_segmentation_facets);
 
             // Perform conversion only if the target "imperial" state is different from the current one.
             // This check supports conversion of "mixed" set of volumes, each with different "imperial" state.
@@ -1201,6 +1184,7 @@ ModelObjectPtrs ModelObject::cut(size_t instance, coordf_t z, bool keep_upper, b
 
         volume->supported_facets.clear();
         volume->seam_facets.clear();
+        volume->mmu_segmentation_facets.clear();
 
         if (! volume->is_model_part()) {
             // Modifiers are not cut, but we still need to add the instance transformation
@@ -1690,6 +1674,8 @@ ModelVolumeType ModelVolume::type_from_string(const std::string &s)
     // New type (supporting the support enforcers & blockers)
     if (s == "ModelPart")
 		return ModelVolumeType::MODEL_PART;
+    if (s == "NegativeVolume")
+        return ModelVolumeType::NEGATIVE_VOLUME;
     if (s == "ParameterModifier")
 		return ModelVolumeType::PARAMETER_MODIFIER;
     if (s == "SupportEnforcer")
@@ -1705,6 +1691,7 @@ std::string ModelVolume::type_to_string(const ModelVolumeType t)
 {
     switch (t) {
 	case ModelVolumeType::MODEL_PART:         return "ModelPart";
+    case ModelVolumeType::NEGATIVE_VOLUME:    return "NegativeVolume";
 	case ModelVolumeType::PARAMETER_MODIFIER: return "ParameterModifier";
 	case ModelVolumeType::SUPPORT_ENFORCER:   return "SupportEnforcer";
 	case ModelVolumeType::SUPPORT_BLOCKER:    return "SupportBlocker";
@@ -1791,6 +1778,7 @@ void ModelVolume::assign_new_unique_ids_recursive()
     config.set_new_unique_id();
     supported_facets.set_new_unique_id();
     seam_facets.set_new_unique_id();
+    mmu_segmentation_facets.set_new_unique_id();
 }
 
 void ModelVolume::rotate(double angle, Axis axis)
@@ -2055,66 +2043,103 @@ bool model_object_list_extended(const Model &model_old, const Model &model_new)
     return true;
 }
 
-bool model_volume_list_changed(const ModelObject &model_object_old, const ModelObject &model_object_new, const ModelVolumeType type)
+template<typename TypeFilterFn>
+bool model_volume_list_changed(const ModelObject &model_object_old, const ModelObject &model_object_new, TypeFilterFn type_filter)
 {
     size_t i_old, i_new;
     for (i_old = 0, i_new = 0; i_old < model_object_old.volumes.size() && i_new < model_object_new.volumes.size();) {
         const ModelVolume &mv_old = *model_object_old.volumes[i_old];
         const ModelVolume &mv_new = *model_object_new.volumes[i_new];
-        if (mv_old.type() != type) {
+        if (! type_filter(mv_old.type())) {
             ++ i_old;
             continue;
         }
-        if (mv_new.type() != type) {
+        if (! type_filter(mv_new.type())) {
             ++ i_new;
             continue;
         }
-        if (mv_old.id() != mv_new.id())
+        if (mv_old.type() != mv_new.type() || mv_old.id() != mv_new.id())
             return true;
         //FIXME test for the content of the mesh!
-
-        if (!mv_old.get_matrix().isApprox(mv_new.get_matrix()))
+        if (! mv_old.get_matrix().isApprox(mv_new.get_matrix()))
             return true;
-
         ++ i_old;
         ++ i_new;
     }
     for (; i_old < model_object_old.volumes.size(); ++ i_old) {
         const ModelVolume &mv_old = *model_object_old.volumes[i_old];
-        if (mv_old.type() == type)
+        if (type_filter(mv_old.type()))
             // ModelVolume was deleted.
             return true;
     }
     for (; i_new < model_object_new.volumes.size(); ++ i_new) {
         const ModelVolume &mv_new = *model_object_new.volumes[i_new];
-        if (mv_new.type() == type)
+        if (type_filter(mv_new.type()))
             // ModelVolume was added.
             return true;
     }
     return false;
 }
 
-bool model_custom_supports_data_changed(const ModelObject& mo, const ModelObject& mo_new) {
-    assert(! model_volume_list_changed(mo, mo_new, ModelVolumeType::MODEL_PART));
-    assert(mo.volumes.size() == mo_new.volumes.size());
-    for (size_t i=0; i<mo.volumes.size(); ++i) {
-        if (! mo_new.volumes[i]->supported_facets.timestamp_matches(mo.volumes[i]->supported_facets))
+bool model_volume_list_changed(const ModelObject &model_object_old, const ModelObject &model_object_new, const ModelVolumeType type)
+{
+    return model_volume_list_changed(model_object_old, model_object_new, [type](const ModelVolumeType t) { return t == type; });
+}
+
+bool model_volume_list_changed(const ModelObject &model_object_old, const ModelObject &model_object_new, const std::initializer_list<ModelVolumeType> &types)
+{
+    return model_volume_list_changed(model_object_old, model_object_new, [&types](const ModelVolumeType t) {
+        return std::find(types.begin(), types.end(), t) != types.end();
+    });
+}
+
+template< typename TypeFilterFn, typename CompareFn>
+bool model_property_changed(const ModelObject &model_object_old, const ModelObject &model_object_new, TypeFilterFn type_filter, CompareFn compare)
+{
+    assert(! model_volume_list_changed(model_object_old, model_object_new, type_filter));
+    size_t i_old, i_new;
+    for (i_old = 0, i_new = 0; i_old < model_object_old.volumes.size() && i_new < model_object_new.volumes.size();) {
+        const ModelVolume &mv_old = *model_object_old.volumes[i_old];
+        const ModelVolume &mv_new = *model_object_new.volumes[i_new];
+        if (! type_filter(mv_old.type())) {
+            ++ i_old;
+            continue;
+        }
+        if (! type_filter(mv_new.type())) {
+            ++ i_new;
+            continue;
+        }
+        assert(mv_old.type() == mv_new.type() && mv_old.id() == mv_new.id());
+        if (! compare(mv_old, mv_new))
             return true;
+        ++ i_old;
+        ++ i_new;
     }
     return false;
 }
 
-bool model_custom_seam_data_changed(const ModelObject& mo, const ModelObject& mo_new) {
-    assert(! model_volume_list_changed(mo, mo_new, ModelVolumeType::MODEL_PART));
-    assert(mo.volumes.size() == mo_new.volumes.size());
-    for (size_t i=0; i<mo.volumes.size(); ++i) {
-        if (! mo_new.volumes[i]->seam_facets.timestamp_matches(mo.volumes[i]->seam_facets))
-            return true;
-    }
-    return false;
+bool model_custom_supports_data_changed(const ModelObject& mo, const ModelObject& mo_new)
+{
+    return model_property_changed(mo, mo_new, 
+        [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; }, 
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.supported_facets.timestamp_matches(mv_new.supported_facets); });
 }
 
-extern bool model_has_multi_part_objects(const Model &model)
+bool model_custom_seam_data_changed(const ModelObject& mo, const ModelObject& mo_new)
+{
+    return model_property_changed(mo, mo_new, 
+        [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; }, 
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.seam_facets.timestamp_matches(mv_new.seam_facets); });
+}
+
+bool model_mmu_segmentation_data_changed(const ModelObject& mo, const ModelObject& mo_new)
+{
+    return model_property_changed(mo, mo_new, 
+        [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; }, 
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.mmu_segmentation_facets.timestamp_matches(mv_new.mmu_segmentation_facets); });
+}
+
+bool model_has_multi_part_objects(const Model &model)
 {
     for (const ModelObject *model_object : model.objects)
     	if (model_object->volumes.size() != 1 || ! model_object->volumes.front()->is_model_part())
@@ -2122,7 +2147,7 @@ extern bool model_has_multi_part_objects(const Model &model)
     return false;
 }
 
-extern bool model_has_advanced_features(const Model &model)
+bool model_has_advanced_features(const Model &model)
 {
 	auto config_is_advanced = [](const ModelConfig &config) {
         return ! (config.empty() || (config.size() == 1 && config.cbegin()->first == "extruder"));

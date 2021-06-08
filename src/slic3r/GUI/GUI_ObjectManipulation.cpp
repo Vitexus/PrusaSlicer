@@ -360,7 +360,7 @@ ObjectManipulation::ObjectManipulation(wxWindow* parent) :
             if (0 <= idx && idx < static_cast<int>(objects.size())) {
                 const ModelObject* mo = wxGetApp().model().objects[idx];
                 const double min_z = mo->bounding_box().min.z();
-                if (std::abs(min_z) > EPSILON) {
+                if (std::abs(min_z) > SINKING_Z_THRESHOLD) {
                     Plater::TakeSnapshot snapshot(wxGetApp().plater(), _L("Drop to bed"));
                     change_position_value(2, m_cache.position.z() - min_z);
                 }
@@ -702,7 +702,11 @@ void ObjectManipulation::update_reset_buttons_visibility()
         }
         show_rotation = !rotation.isApprox(Vec3d::Zero());
         show_scale = !scale.isApprox(Vec3d::Ones());
+#if ENABLE_ALLOW_NEGATIVE_Z
+        show_drop_to_bed = std::abs(min_z) > SINKING_Z_THRESHOLD;
+#else
         show_drop_to_bed = (std::abs(min_z) > EPSILON);
+#endif // ENABLE_ALLOW_NEGATIVE_Z
     }
 
     wxGetApp().CallAfter([this, show_rotation, show_scale, show_drop_to_bed] {
@@ -1095,15 +1099,19 @@ double ManipulationEditor::get_value()
     wxString str = GetValue();
 
     double value;
-    // Replace the first occurence of comma in decimal number.
-    str.Replace(",", ".", false);
+    const char dec_sep = is_decimal_separator_point() ? '.' : ',';
+    const char dec_sep_alt = dec_sep == '.' ? ',' : '.';
+    // Replace the first incorrect separator in decimal number.
+    if (str.Replace(dec_sep_alt, dec_sep, false) != 0)
+        SetValue(str);
+
     if (str == ".")
         value = 0.0;
 
-    if ((str.IsEmpty() || !str.ToCDouble(&value)) && !m_valid_value.IsEmpty()) {
+    if ((str.IsEmpty() || !str.ToDouble(&value)) && !m_valid_value.IsEmpty()) {
         str = m_valid_value;
         SetValue(str);
-        str.ToCDouble(&value);
+        str.ToDouble(&value);
     }
 
     return value;

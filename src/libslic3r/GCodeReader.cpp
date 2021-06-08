@@ -6,6 +6,8 @@
 #include <iostream>
 #include <iomanip>
 
+#include "LocalesUtils.hpp"
+
 #include <Shiny/Shiny.h>
 
 namespace Slic3r {
@@ -25,6 +27,8 @@ void GCodeReader::apply_config(const DynamicPrintConfig &config)
 const char* GCodeReader::parse_line_internal(const char *ptr, GCodeLine &gline, std::pair<const char*, const char*> &command)
 {
     PROFILE_FUNC();
+
+    assert(is_decimal_separator_point());
     
     // command and args
     const char *c = ptr;
@@ -150,6 +154,7 @@ bool GCodeReader::GCodeLine::has(char axis) const
 
 bool GCodeReader::GCodeLine::has_value(char axis, float &value) const
 {
+    assert(is_decimal_separator_point());
     const char *c = m_raw.c_str();
     // Skip the whitespaces.
     c = skip_whitespaces(c);

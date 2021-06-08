@@ -120,6 +120,9 @@ wxDECLARE_EVENT(EVT_GLCANVAS_INSTANCE_SCALED, SimpleEvent);
 wxDECLARE_EVENT(EVT_GLCANVAS_WIPETOWER_ROTATED, Vec3dEvent);
 wxDECLARE_EVENT(EVT_GLCANVAS_ENABLE_ACTION_BUTTONS, Event<bool>);
 wxDECLARE_EVENT(EVT_GLCANVAS_UPDATE_GEOMETRY, Vec3dsEvent<2>);
+#if ENABLE_SEQUENTIAL_LIMITS
+wxDECLARE_EVENT(EVT_GLCANVAS_MOUSE_DRAGGING_STARTED, SimpleEvent);
+#endif // ENABLE_SEQUENTIAL_LIMITS
 wxDECLARE_EVENT(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED, SimpleEvent);
 wxDECLARE_EVENT(EVT_GLCANVAS_UPDATE_BED_SHAPE, SimpleEvent);
 wxDECLARE_EVENT(EVT_GLCANVAS_TAB, SimpleEvent);
@@ -211,7 +214,7 @@ class GLCanvas3D
         void set_enabled(bool enabled);
 
         void render_overlay(const GLCanvas3D& canvas) const;
-        void render_volumes(const GLCanvas3D& canvas, const GLVolumeCollection& volumes) const;
+        void render_volumes(const GLCanvas3D& canvas, const GLVolumeCollection& volumes);
 
 		void adjust_layer_height_profile();
 		void accept_changes(GLCanvas3D& canvas);
@@ -425,6 +428,10 @@ private:
     Model* m_model;
     BackgroundSlicingProcess *m_process;
 
+#if ENABLE_SCROLLABLE_LEGEND
+    std::array<unsigned int, 2> m_old_size{ 0, 0 };
+#endif // ENABLE_SCROLLABLE_LEGEND
+
     // Screen is only refreshed from the OnIdle handler if it is dirty.
     bool m_dirty;
     bool m_initialized;
@@ -492,6 +499,29 @@ private:
 
     void load_arrange_settings();
 
+#if ENABLE_SEQUENTIAL_LIMITS
+    class SequentialPrintClearance
+    {
+        GLModel m_fill;
+        GLModel m_perimeter;
+        bool m_render_fill{ true };
+        bool m_visible{ false };
+
+        std::vector<Pointf3s> m_hull_2d_cache;
+
+    public:
+        void set_polygons(const Polygons& polygons);
+        void set_render_fill(bool render_fill) { m_render_fill = render_fill; }
+        void set_visible(bool visible) { m_visible = visible; }
+        void render();
+
+        friend class GLCanvas3D;
+    };
+
+    SequentialPrintClearance m_sequential_print_clearance;
+    bool m_sequential_print_clearance_first_displacement{ true };
+#endif // ENABLE_SEQUENTIAL_LIMITS
+
 public:
     explicit GLCanvas3D(wxGLCanvas* canvas);
     ~GLCanvas3D();
@@ -516,6 +546,11 @@ public:
     void reset_gcode_toolpaths() { m_gcode_viewer.reset(); }
     const GCodeViewer::SequentialView& get_gcode_sequential_view() const { return m_gcode_viewer.get_sequential_view(); }
     void update_gcode_sequential_view_current(unsigned int first, unsigned int last) { m_gcode_viewer.update_sequential_view_current(first, last); }
+
+#if ENABLE_GCODE_WINDOW
+    void start_mapping_gcode_window();
+    void stop_mapping_gcode_window();
+#endif // ENABLE_GCODE_WINDOW
 
     void toggle_sla_auxiliaries_visibility(bool visible, const ModelObject* mo = nullptr, int instance_idx = -1);
     void toggle_model_objects_visibility(bool visible, const ModelObject* mo = nullptr, int instance_idx = -1);
@@ -587,7 +622,7 @@ public:
     void render();
     // printable_only == false -> render also non printable volumes as grayed
     // parts_only == false -> render also sla support and pad
-    void render_thumbnail(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background) const;
+    void render_thumbnail(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
 
     void select_all();
     void deselect_all();
@@ -637,7 +672,7 @@ public:
     Size get_canvas_size() const;
     Vec2d get_local_mouse_position() const;
 
-    void set_tooltip(const std::string& tooltip) const;
+    void set_tooltip(const std::string& tooltip);
 
     // the following methods add a snapshot to the undo/redo stack, unless the given string is empty
     void do_move(const std::string& snapshot_type);
@@ -733,6 +768,35 @@ public:
 #endif
     }
 
+#if ENABLE_SEQUENTIAL_LIMITS
+    void reset_sequential_print_clearance() {
+        m_sequential_print_clearance.set_visible(false);
+        m_sequential_print_clearance.set_render_fill(false);
+        m_sequential_print_clearance.set_polygons(Polygons());
+    }
+
+    void set_sequential_print_clearance_visible(bool visible) {
+        m_sequential_print_clearance.set_visible(visible);
+    }
+
+    void set_sequential_print_clearance_render_fill(bool render_fill) {
+        m_sequential_print_clearance.set_render_fill(render_fill);
+    }
+
+    void set_sequential_print_clearance_polygons(const Polygons& polygons) {
+        m_sequential_print_clearance.set_polygons(polygons);
+    }
+
+    void update_sequential_clearance();
+#endif // ENABLE_SEQUENTIAL_LIMITS
+
+    const Print* fff_print() const;
+    const SLAPrint* sla_print() const;
+
+#if ENABLE_SCROLLABLE_LEGEND
+    void reset_old_size() { m_old_size = { 0, 0 }; }
+#endif // ENABLE_SCROLLABLE_LEGEND
+
 private:
     bool _is_shown_on_screen() const;
 
@@ -752,42 +816,45 @@ private:
 
     void _refresh_if_shown_on_screen();
 
-    void _picking_pass() const;
-    void _rectangular_selection_picking_pass() const;
+    void _picking_pass();
+    void _rectangular_selection_picking_pass();
     void _render_background() const;
-    void _render_bed(bool bottom, bool show_axes) const;
-    void _render_objects() const;
+    void _render_bed(bool bottom, bool show_axes);
+    void _render_objects();
     void _render_gcode() const;
     void _render_selection() const;
+#if ENABLE_SEQUENTIAL_LIMITS
+    void _render_sequential_clearance();
+#endif // ENABLE_SEQUENTIAL_LIMITS
 #if ENABLE_RENDER_SELECTION_CENTER
     void _render_selection_center() const;
 #endif // ENABLE_RENDER_SELECTION_CENTER
-    void _check_and_update_toolbar_icon_scale() const;
-    void _render_overlays() const;
+    void _check_and_update_toolbar_icon_scale();
+    void _render_overlays();
     void _render_volumes_for_picking() const;
     void _render_current_gizmo() const;
-    void _render_gizmos_overlay() const;
-    void _render_main_toolbar() const;
-    void _render_undoredo_toolbar() const;
+    void _render_gizmos_overlay();
+    void _render_main_toolbar();
+    void _render_undoredo_toolbar();
     void _render_collapse_toolbar() const;
     void _render_view_toolbar() const;
 #if ENABLE_SHOW_CAMERA_TARGET
     void _render_camera_target() const;
 #endif // ENABLE_SHOW_CAMERA_TARGET
-    void _render_sla_slices() const;
+    void _render_sla_slices();
     void _render_selection_sidebar_hints() const;
-    bool _render_undo_redo_stack(const bool is_undo, float pos_x) const;
-    bool _render_search_list(float pos_x) const;
+    bool _render_undo_redo_stack(const bool is_undo, float pos_x);
+    bool _render_search_list(float pos_x);
     bool _render_arrange_menu(float pos_x);
-    void _render_thumbnail_internal(ThumbnailData& thumbnail_data, bool printable_only, bool parts_only, bool show_bed, bool transparent_background) const;
+    void _render_thumbnail_internal(ThumbnailData& thumbnail_data, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
     // render thumbnail using an off-screen framebuffer
-    void _render_thumbnail_framebuffer(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background) const;
+    void _render_thumbnail_framebuffer(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
     // render thumbnail using an off-screen framebuffer when GLEW_EXT_framebuffer_object is supported
-    void _render_thumbnail_framebuffer_ext(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background) const;
+    void _render_thumbnail_framebuffer_ext(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
     // render thumbnail using the default framebuffer
-    void _render_thumbnail_legacy(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background) const;
+    void _render_thumbnail_legacy(ThumbnailData& thumbnail_data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
 
-    void _update_volumes_hover_state() const;
+    void _update_volumes_hover_state();
 
     void _perform_layer_editing_action(wxMouseEvent* evt = nullptr);
 
@@ -835,10 +902,6 @@ private:
     float get_overlay_window_width() { return LayersEditing::get_overlay_window_width(); }
 
     static std::vector<float> _parse_colors(const std::vector<std::string>& colors);
-
-public:
-    const Print* fff_print() const;
-    const SLAPrint* sla_print() const;
 };
 
 } // namespace GUI

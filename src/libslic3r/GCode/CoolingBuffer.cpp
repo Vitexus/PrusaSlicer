@@ -357,6 +357,8 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
                 for (; *c == ' ' || *c == '\t'; ++ c);
                 if (*c == 0 || *c == ';')
                     break;
+
+                assert(is_decimal_separator_point()); // for atof
                 // Parse the axis.
                 size_t axis = (*c >= 'X' && *c <= 'Z') ? (*c - 'X') :
                               (*c == extrusion_axis) ? 3 : (*c == 'F') ? 4 : size_t(-1);
@@ -454,6 +456,7 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
             line.type = CoolingLine::TYPE_G4;
             size_t pos_S = sline.find('S', 3);
             size_t pos_P = sline.find('P', 3);
+            assert(is_decimal_separator_point()); // for atof
             line.time = line.time_max = float(
                 (pos_S > 0) ? atof(sline.c_str() + pos_S + 1) :
                 (pos_P > 0) ? atof(sline.c_str() + pos_P + 1) * 0.001 : 0.);
@@ -722,8 +725,8 @@ std::string CoolingBuffer::apply_layer_cooldown(
             if (int(layer_id) >= disable_fan_first_layers && int(layer_id) + 1 < full_fan_speed_layer) {
                 // Ramp up the fan speed from disable_fan_first_layers to full_fan_speed_layer.
                 float factor = float(int(layer_id + 1) - disable_fan_first_layers) / float(full_fan_speed_layer - disable_fan_first_layers);
-                fan_speed_new    = clamp(0, 255, int(float(fan_speed_new   ) * factor + 0.5f));
-                bridge_fan_speed = clamp(0, 255, int(float(bridge_fan_speed) * factor + 0.5f));
+                fan_speed_new    = std::clamp(int(float(fan_speed_new) * factor + 0.5f), 0, 255);
+                bridge_fan_speed = std::clamp(int(float(bridge_fan_speed) * factor + 0.5f), 0, 255);
             }
 #undef EXTRUDER_CONFIG
             bridge_fan_control = bridge_fan_speed > fan_speed_new;

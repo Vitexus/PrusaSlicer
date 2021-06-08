@@ -1545,6 +1545,7 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Speed for non-print moves"));
         optgroup->append_single_option_line("travel_speed");
+        optgroup->append_single_option_line("travel_speed_z");
 
         optgroup = page->new_optgroup(L("Modifiers"));
         optgroup->append_single_option_line("first_layer_speed");
@@ -1589,6 +1590,7 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Advanced"));
         optgroup->append_single_option_line("interface_shells");
+        optgroup->append_single_option_line("mmu_segmented_region_max_width");
 
     page = add_options_page(L("Advanced"), "wrench");
         optgroup = page->new_optgroup(L("Extrusion width"));
@@ -1609,6 +1611,7 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Slicing"));
         optgroup->append_single_option_line("slice_closing_radius");
+        optgroup->append_single_option_line("slicing_mode");
         optgroup->append_single_option_line("resolution");
         optgroup->append_single_option_line("xy_size_compensation");
         optgroup->append_single_option_line("elefant_foot_compensation", "elephant-foot-compensation_114487");
@@ -4317,6 +4320,7 @@ void TabSLAPrint::build()
     page = add_options_page(L("Advanced"), "wrench");
     optgroup = page->new_optgroup(L("Slicing"));
     optgroup->append_single_option_line("slice_closing_radius");
+    optgroup->append_single_option_line("slicing_mode");
 
     page = add_options_page(L("Output options"), "output+page_white");
     optgroup = page->new_optgroup(L("Output file"));

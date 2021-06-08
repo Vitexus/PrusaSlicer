@@ -201,47 +201,33 @@ using namespace boost::polygon;  // provides also high() and low()
 
 namespace Slic3r { namespace Geometry {
 
-static bool sort_points(const Point& a, const Point& b)
-{
-    return (a(0) < b(0)) || (a(0) == b(0) && a(1) < b(1));
-}
-
-static bool sort_pointfs(const Vec3d& a, const Vec3d& b)
-{
-    return (a(0) < b(0)) || (a(0) == b(0) && a(1) < b(1));
-}
-
 // This implementation is based on Andrew's monotone chain 2D convex hull algorithm
-Polygon convex_hull(Points points)
+Polygon convex_hull(Points pts)
 {
-    assert(points.size() >= 3);
-    // sort input points
-    std::sort(points.begin(), points.end(), sort_points);
+    std::sort(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a.x() < b.x() || (a.x() == b.x() && a.y() < b.y()); });
+    pts.erase(std::unique(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a.x() == b.x() && a.y() == b.y(); }), pts.end());
 
-    int n = points.size(), k = 0;
     Polygon hull;
-
+    int n = (int)pts.size();
     if (n >= 3) {
+        int k = 0;
         hull.points.resize(2 * n);
-
         // Build lower hull
-        for (int i = 0; i < n; i++) {
-            while (k >= 2 && points[i].ccw(hull[k-2], hull[k-1]) <= 0) k--;
-            hull[k++] = points[i];
+        for (int i = 0; i < n; ++ i) {
+            while (k >= 2 && pts[i].ccw(hull[k-2], hull[k-1]) <= 0)
+                -- k;
+            hull[k ++] = pts[i];
         }
-
         // Build upper hull
         for (int i = n-2, t = k+1; i >= 0; i--) {
-            while (k >= t && points[i].ccw(hull[k-2], hull[k-1]) <= 0) k--;
-            hull[k++] = points[i];
+            while (k >= t && pts[i].ccw(hull[k-2], hull[k-1]) <= 0)
+                -- k;
+            hull[k ++] = pts[i];
         }
-
         hull.points.resize(k);
-
         assert(hull.points.front() == hull.points.back());
         hull.points.pop_back();
     }
-    
     return hull;
 }
 
@@ -249,7 +235,7 @@ Pointf3s convex_hull(Pointf3s points)
 {
     assert(points.size() >= 3);
     // sort input points
-    std::sort(points.begin(), points.end(), sort_pointfs);
+    std::sort(points.begin(), points.end(), [](const Vec3d &a, const Vec3d &b){ return a.x() < b.x() || (a.x() == b.x() && a.y() < b.y()); });
 
     int n = points.size(), k = 0;
     Pointf3s hull;
@@ -1508,6 +1494,7 @@ Transformation Transformation::volume_to_bed_transformation(const Transformation
 // For parsing a transformation matrix from 3MF / AMF.
 Transform3d transform3d_from_string(const std::string& transform_str)
 {
+    assert(is_decimal_separator_point()); // for atof
     Transform3d transform = Transform3d::Identity();
 
     if (!transform_str.empty())

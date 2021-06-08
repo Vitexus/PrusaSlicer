@@ -239,26 +239,20 @@ template<typename T> inline bool one_of(const T& v, const std::initializer_list<
     { return contains(il, v); }
 
 template<typename T>
-static inline T sqr(T x)
+constexpr inline T sqr(T x)
 {
     return x * x;
 }
 
-template <typename T>
-static inline T clamp(const T low, const T high, const T value)
-{
-    return std::max(low, std::min(high, value));
-}
-
 template <typename T, typename Number>
-static inline T lerp(const T& a, const T& b, Number t)
+constexpr inline T lerp(const T& a, const T& b, Number t)
 {
     assert((t >= Number(-EPSILON)) && (t <= Number(1) + Number(EPSILON)));
     return (Number(1) - t) * a + t * b;
 }
 
 template <typename Number>
-static inline bool is_approx(Number value, Number test_value)
+constexpr inline bool is_approx(Number value, Number test_value)
 {
     return std::fabs(double(value) - double(test_value)) < double(EPSILON);
 }
@@ -311,6 +305,29 @@ IntegerOnly<I, std::vector<T, Args...>> reserve_vector(I capacity)
 // Borrowed from C++20
 template<class T>
 using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+// A very simple range concept implementation with iterator-like objects.
+// This should be replaced by std::ranges::subrange (C++20)
+template<class It> class Range
+{
+    It from, to;
+public:
+
+    // The class is ready for range based for loops.
+    It begin() const { return from; }
+    It end() const { return to; }
+
+    // The iterator type can be obtained this way.
+    using iterator = It;
+    using value_type = typename std::iterator_traits<It>::value_type;
+
+    Range() = default;
+    Range(It b, It e) : from(std::move(b)), to(std::move(e)) {}
+
+    // Some useful container-like methods...
+    inline size_t size() const { return end() - begin(); }
+    inline bool   empty() const { return size() == 0; }
+};
 
 } // namespace Slic3r
 

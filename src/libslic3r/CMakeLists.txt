@@ -126,10 +126,14 @@ add_library(libslic3r STATIC
     Line.hpp
     LibraryCheck.cpp
     LibraryCheck.hpp
+    LocalesUtils.cpp
+    LocalesUtils.hpp
     Model.cpp
     Model.hpp
     ModelArrange.hpp
     ModelArrange.cpp
+    MultiMaterialSegmentation.cpp
+    MultiMaterialSegmentation.hpp
     CustomGCode.cpp
     CustomGCode.hpp
     Arrange.hpp
@@ -169,6 +173,7 @@ add_library(libslic3r STATIC
     PrintConfig.cpp
     PrintConfig.hpp
     PrintObject.cpp
+    PrintObjectSlice.cpp
     PrintRegion.cpp
     PNGReadWrite.hpp
     PNGReadWrite.cpp
@@ -200,6 +205,7 @@ add_library(libslic3r STATIC
     TriangleMesh.hpp
     TriangleMeshSlicer.cpp
     TriangleMeshSlicer.hpp
+    MeshSplitImpl.hpp
     TriangulateWall.hpp
     TriangulateWall.cpp
     utils.cpp
@@ -261,8 +267,6 @@ add_library(libslic3r STATIC
     SLA/SupportPoint.hpp
     SLA/SupportPointGenerator.hpp
     SLA/SupportPointGenerator.cpp
-    SLA/Contour3D.hpp
-    SLA/Contour3D.cpp
     SLA/IndexedMesh.hpp
     SLA/IndexedMesh.cpp
     SLA/Clustering.hpp

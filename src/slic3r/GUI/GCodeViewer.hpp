@@ -505,7 +505,9 @@ public:
             Vec3f m_world_position;
             Transform3f m_world_transform;
             float m_z_offset{ 0.5f };
+#if !ENABLE_SEQUENTIAL_LIMITS
             std::array<float, 4> m_color{ 1.0f, 1.0f, 1.0f, 0.5f };
+#endif // !ENABLE_SEQUENTIAL_LIMITS
             bool m_visible{ true };
 
         public:
@@ -514,7 +516,9 @@ public:
             const BoundingBoxf3& get_bounding_box() const { return m_model.get_bounding_box(); }
 
             void set_world_position(const Vec3f& position);
+#if !ENABLE_SEQUENTIAL_LIMITS
             void set_color(const std::array<float, 4>& color) { m_color = color; }
+#endif // !ENABLE_SEQUENTIAL_LIMITS
 
             bool is_visible() const { return m_visible; }
             void set_visible(bool visible) { m_visible = visible; }
@@ -557,7 +561,6 @@ public:
 
             void render(float top, float bottom, uint64_t curr_line_id) const;
 
-        private:
             void stop_mapping_file();
         };
 #endif // ENABLE_GCODE_WINDOW
@@ -615,6 +618,8 @@ private:
     std::vector<ExtrusionRole> m_roles;
     size_t m_extruders_count;
     std::vector<unsigned char> m_extruder_ids;
+    std::vector<float> m_filament_diameters;
+    std::vector<float> m_filament_densities;
     Extrusions m_extrusions;
     SequentialView m_sequential_view;
     Shells m_shells;
@@ -675,6 +680,8 @@ public:
     void export_toolpaths_to_obj(const char* filename) const;
 
 #if ENABLE_GCODE_WINDOW
+    void start_mapping_gcode_window();
+    void stop_mapping_gcode_window();
     void toggle_gcode_window_visibility() { m_sequential_view.gcode_window.toggle_visibility(); }
 #endif // ENABLE_GCODE_WINDOW
 

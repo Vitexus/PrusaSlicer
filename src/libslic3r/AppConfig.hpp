@@ -178,7 +178,7 @@ private:
 	    auto it_val = it->second.find(parameter_name);
 	    if (it_val == it->second.end())
 	        return false;
-	    out = T(::atof(it_val->second.c_str()));
+        out = T(string_to_double_decimal_point(it_val->second));
 	    return true;
 	}
 
@@ -196,6 +196,6 @@ private:
 	bool                                                        m_legacy_datadir;
 };
 
-}; // namespace Slic3r
+} // namespace Slic3r
 
 #endif /* slic3r_AppConfig_hpp_ */

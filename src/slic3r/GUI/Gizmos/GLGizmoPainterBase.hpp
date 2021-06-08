@@ -7,25 +7,23 @@
 
 #include "libslic3r/ObjectID.hpp"
 #include "libslic3r/TriangleSelector.hpp"
+#include "libslic3r/Model.hpp"
 
 #include <cereal/types/vector.hpp>
 
 
 
-
-namespace Slic3r {
-
-enum class EnforcerBlockerType : int8_t;
-
-namespace GUI {
+namespace Slic3r::GUI {
 
 enum class SLAGizmoEventType : unsigned char;
 class ClippingPlane;
 struct Camera;
+class GLGizmoMmuSegmentation;
 
 enum class PainterGizmoType {
     FDM_SUPPORTS,
-    SEAM
+    SEAM,
+    MMU_SEGMENTATION
 };
 
 
@@ -36,7 +34,7 @@ public:
 
     // Render current selection. Transformation matrices are supposed
     // to be already set.
-    void render(ImGuiWrapper* imgui = nullptr);
+    virtual void render(ImGuiWrapper* imgui = nullptr);
 
 #ifdef PRUSASLICER_TRIANGLE_SELECTOR_DEBUG
     void render_debug(ImGuiWrapper* imgui);
@@ -48,6 +46,8 @@ private:
     GLIndexedVertexArray m_iva_enforcers;
     GLIndexedVertexArray m_iva_blockers;
     std::array<GLIndexedVertexArray, 3> m_varrays;
+protected:
+    GLIndexedVertexArray m_iva_seed_fill;
 };
 
 
@@ -65,8 +65,8 @@ private:
 public:
     GLGizmoPainterBase(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id);
     ~GLGizmoPainterBase() override {}
-    void set_painter_gizmo_data(const Selection& selection);
-    bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down);
+    virtual void set_painter_gizmo_data(const Selection& selection);
+    virtual bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down);
 
     // Following function renders the triangles and cursor. Having this separated
     // from usual on_render method allows to render them before transparent objects,
@@ -84,6 +84,12 @@ protected:
     void activate_internal_undo_redo_stack(bool activate);
     void set_cursor_type(TriangleSelector::CursorType);
 
+    virtual std::array<float, 4> get_cursor_sphere_left_button_color() const { return {0.f, 0.f, 1.f, 0.25f}; }
+    virtual std::array<float, 4> get_cursor_sphere_right_button_color() const { return {1.f, 0.f, 0.f, 0.25f}; }
+
+    virtual EnforcerBlockerType get_left_button_state_type() const { return EnforcerBlockerType::ENFORCER; }
+    virtual EnforcerBlockerType get_right_button_state_type() const { return EnforcerBlockerType::BLOCKER; }
+
     float m_cursor_radius = 2.f;
     static constexpr float CursorRadiusMin  = 0.4f; // cannot be zero
     static constexpr float CursorRadiusMax  = 8.f;
@@ -94,6 +100,15 @@ protected:
 
     TriangleSelector::CursorType m_cursor_type = TriangleSelector::SPHERE;
 
+    bool  m_triangle_splitting_enabled = true;
+    bool  m_seed_fill_enabled          = false;
+    float m_seed_fill_angle            = 0.f;
+
+    enum class Button {
+        None,
+        Left,
+        Right
+    };
 
 private:
     bool is_mesh_point_clipped(const Vec3d& point, const Transform3d& trafo) const;
@@ -106,12 +121,6 @@ private:
     bool m_internal_stack_active = false;
     bool m_schedule_update = false;
     Vec2d m_last_mouse_click = Vec2d::Zero();
-
-    enum class Button {
-        None,
-        Left,
-        Right
-    };
 
     Button m_button_down = Button::None;
     EState m_old_state = Off; // to be able to see that the gizmo has just been closed (see on_set_state)
@@ -141,10 +150,13 @@ protected:
     void on_load(cereal::BinaryInputArchive& ar) override;
     void on_save(cereal::BinaryOutputArchive& ar) const override {}
     CommonGizmosDataID on_get_requirements() const override;
+
+    virtual wxString handle_snapshot_action_name(bool shift_down, Button button_down) const = 0;
+
+    friend class ::Slic3r::GUI::GLGizmoMmuSegmentation;
 };
 
 
-} // namespace GUI
-} // namespace Slic3r
+} // namespace Slic3r::GUI
 
 #endif // slic3r_GLGizmoPainterBase_hpp_

@@ -23,6 +23,8 @@
 #endif
 
 #include <assert.h>
+#include <boost/thread/mutex.hpp>
+#include <boost/thread/lock_guard.hpp>
 
 #if defined(SLIC3R_DEBUG) || defined(SLIC3R_DEBUG_SLICE_PROCESSING)
 #include "SVG.hpp"
@@ -965,7 +967,7 @@ static ExPolygons make_expolygons_simple(std::vector<IntersectionLine> &lines)
     return slices;
 }
 
-static void make_expolygons(const Polygons &loops, const float closing_radius, const float extra_offset, ExPolygons* slices)
+static void make_expolygons(const Polygons &loops, const float closing_radius, const float extra_offset, ClipperLib::PolyFillType fill_type, ExPolygons* slices)
 {
     /*
         Input loops are not suitable for evenodd nor nonzero fill types, as we might get
@@ -1021,9 +1023,17 @@ static void make_expolygons(const Polygons &loops, const float closing_radius, c
 //    double safety_offset = scale_(0.0499);
     // 0.0001 is set to satisfy GH #520, #1029, #1364
     assert(closing_radius >= 0);
-    assert(extra_offset >= 0);
-    double offset_out = + scale_(closing_radius + extra_offset);
-    double offset_in  = - scale_(closing_radius);
+    // Allowing negative extra_offset for shrinking a contour. This likely only makes sense if slicing a single region only.
+    //assert(extra_offset >= 0);
+    double offset_out;
+    double offset_in;
+    if (closing_radius >= extra_offset) {
+        offset_out = + scale_(closing_radius);
+        offset_in  = - scale_(closing_radius - extra_offset);
+    } else {
+        offset_out = + scale_(extra_offset);
+        offset_in  = 0.;
+    }
 
     /* The following line is commented out because it can generate wrong polygons,
        see for example issue #661 */
@@ -1039,10 +1049,10 @@ static void make_expolygons(const Polygons &loops, const float closing_radius, c
     
     // append to the supplied collection
     expolygons_append(*slices,
-        offset_out > 0 && offset_in < 0 ? offset2_ex(union_ex(loops), offset_out, offset_in) :
-        offset_out > 0 ? offset_ex(union_ex(loops), offset_out) :
-        offset_in  < 0 ? offset_ex(union_ex(loops), offset_in) :
-        union_ex(loops));
+        offset_out > 0 && offset_in < 0 ? offset2_ex(union_ex(loops, fill_type), offset_out, offset_in) :
+        offset_out > 0 ? offset_ex(union_ex(loops, fill_type), offset_out) :
+        offset_in  < 0 ? offset_ex(union_ex(loops, fill_type), offset_in) :
+        union_ex(loops, fill_type));
 }
 
 std::vector<Polygons> slice_mesh(
@@ -1075,7 +1085,7 @@ std::vector<Polygons> slice_mesh(
                 auto t = params.trafo;
                 t.prescale(Vec3d(s, s, 1.));
                 auto tf = t.cast<float>();
-                slice_make_lines(mesh.vertices, [tf](const Vec3f &p) { return tf * p; }, mesh.indices, facets_edges, zs, throw_on_cancel);
+                lines = slice_make_lines(mesh.vertices, [tf](const Vec3f &p) { return tf * p; }, mesh.indices, facets_edges, zs, throw_on_cancel);
             }
         } else {
             // Copy and scale vertices in XY, don't scale in Z.
@@ -1161,17 +1171,22 @@ std::vector<ExPolygons> slice_mesh_ex(
         tbb::blocked_range<size_t>(0, layers_p.size()),
         [&layers_p, &params, &layers, throw_on_cancel]
         (const tbb::blocked_range<size_t>& range) {
+            auto resolution = scaled<float>(params.resolution);
             for (size_t layer_id = range.begin(); layer_id < range.end(); ++ layer_id) {
                 throw_on_cancel();
                 ExPolygons &expolygons = layers[layer_id];
-                Slic3r::make_expolygons(layers_p[layer_id], params.closing_radius, params.extra_offset, &expolygons);
-                //FIXME simplify
                 const auto this_mode = layer_id < params.slicing_mode_normal_below_layer ? params.mode_below : params.mode;
+                Slic3r::make_expolygons(
+                    layers_p[layer_id], params.closing_radius, params.extra_offset,
+                    this_mode == MeshSlicingParams::SlicingMode::EvenOdd ? ClipperLib::pftEvenOdd : 
+                    this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour ? ClipperLib::pftPositive : ClipperLib::pftNonZero,
+                    &expolygons);
+                //FIXME simplify
                 if (this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour)
                     keep_largest_contour_only(expolygons);
-                if (params.resolution != 0.)
+                if (resolution != 0.)
                     for (ExPolygon &ex : expolygons)
-                        ex.simplify(params.resolution);
+                        ex.simplify(resolution);
             }
         });
 //    BOOST_LOG_TRIVIAL(debug) << "slice_mesh make_expolygons in parallel - end";
@@ -1179,6 +1194,7 @@ std::vector<ExPolygons> slice_mesh_ex(
     return layers;
 }
 
+// Remove duplicates of slice_vertices, optionally triangulate the cut.
 static void triangulate_slice(
     indexed_triangle_set    &its, 
     IntersectionLines       &lines, 
@@ -1186,7 +1202,8 @@ static void triangulate_slice(
     // Vertices of the original (unsliced) mesh. Newly added vertices are those on the slice.
     int                      num_original_vertices,
     // Z height of the slice.
-    float                    z)
+    float                    z, 
+    bool                     triangulate)
 {
     sort_remove_duplicates(slice_vertices);
 
@@ -1230,33 +1247,35 @@ static void triangulate_slice(
                     f(i) = map_duplicate_vertex[f(i) - num_original_vertices];
     }
 
-    size_t idx_vertex_new_first = its.vertices.size();
-    Pointf3s triangles = triangulate_expolygons_3d(make_expolygons_simple(lines), z, true);
-    for (size_t i = 0; i < triangles.size(); ) {
-        stl_triangle_vertex_indices facet;
-        for (size_t j = 0; j < 3; ++ j) {
-            Vec3f v = triangles[i ++].cast<float>();
-            auto it = lower_bound_by_predicate(map_vertex_to_index.begin(), map_vertex_to_index.end(), 
-                [&v](const std::pair<Vec2f, int> &l) { return l.first.x() < v.x() || (l.first.x() == v.x() && l.first.y() < v.y()); });
-            int   idx = -1;
-            if (it != map_vertex_to_index.end() && it->first.x() == v.x() && it->first.y() == v.y())
-                idx = it->second;
-            else {
-                // Try to find the vertex in the list of newly added vertices. Those vertices are not matched on the cut and they shall be rare.
-                for (size_t k = idx_vertex_new_first; k < its.vertices.size(); ++ k)
-                    if (its.vertices[k] == v) {
-                        idx = int(k);
-                        break;
+    if (triangulate) {
+        size_t idx_vertex_new_first = its.vertices.size();
+        Pointf3s triangles = triangulate_expolygons_3d(make_expolygons_simple(lines), z, true);
+        for (size_t i = 0; i < triangles.size(); ) {
+            stl_triangle_vertex_indices facet;
+            for (size_t j = 0; j < 3; ++ j) {
+                Vec3f v = triangles[i ++].cast<float>();
+                auto it = lower_bound_by_predicate(map_vertex_to_index.begin(), map_vertex_to_index.end(), 
+                    [&v](const std::pair<Vec2f, int> &l) { return l.first.x() < v.x() || (l.first.x() == v.x() && l.first.y() < v.y()); });
+                int   idx = -1;
+                if (it != map_vertex_to_index.end() && it->first.x() == v.x() && it->first.y() == v.y())
+                    idx = it->second;
+                else {
+                    // Try to find the vertex in the list of newly added vertices. Those vertices are not matched on the cut and they shall be rare.
+                    for (size_t k = idx_vertex_new_first; k < its.vertices.size(); ++ k)
+                        if (its.vertices[k] == v) {
+                            idx = int(k);
+                            break;
+                        }
+                    if (idx == -1) {
+                        idx = int(its.vertices.size());
+                        its.vertices.emplace_back(v);
                     }
-                if (idx == -1) {
-                    idx = int(its.vertices.size());
-                    its.vertices.emplace_back(v);
                 }
+                facet(j) = idx;
             }
-            facet(j) = idx;
+            if (facet(0) != facet(1) && facet(0) != facet(2) && facet(1) != facet(2))
+                its.indices.emplace_back(facet);
         }
-        if (facet(0) != facet(1) && facet(0) != facet(2) && facet(1) != facet(2))
-            its.indices.emplace_back(facet);
     }
 
     // Remove vertices, which are not referenced by any face.
@@ -1266,7 +1285,7 @@ static void triangulate_slice(
     // its_remove_degenerate_faces(its);
 }
 
-void cut_mesh(const indexed_triangle_set &mesh, float z, indexed_triangle_set *upper, indexed_triangle_set *lower)
+void cut_mesh(const indexed_triangle_set &mesh, float z, indexed_triangle_set *upper, indexed_triangle_set *lower, bool triangulate_caps)
 {
     assert(upper || lower);
     if (upper == nullptr && lower == nullptr)
@@ -1413,10 +1432,10 @@ void cut_mesh(const indexed_triangle_set &mesh, float z, indexed_triangle_set *u
     }
     
     if (upper != nullptr)
-        triangulate_slice(*upper, upper_lines, upper_slice_vertices, int(mesh.vertices.size()), z);
+        triangulate_slice(*upper, upper_lines, upper_slice_vertices, int(mesh.vertices.size()), z, triangulate_caps);
 
     if (lower != nullptr)
-        triangulate_slice(*lower, lower_lines, lower_slice_vertices, int(mesh.vertices.size()), z);
+        triangulate_slice(*lower, lower_lines, lower_slice_vertices, int(mesh.vertices.size()), z, triangulate_caps);
 }
 
 }

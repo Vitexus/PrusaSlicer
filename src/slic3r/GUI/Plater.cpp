@@ -1362,6 +1362,7 @@ void Sidebar::update_ui_from_settings()
     p->plater->canvas3D()->update_gizmos_on_off_state();
     p->plater->set_current_canvas_as_dirty();
     p->plater->get_current_canvas3D()->request_extra_frame();
+    p->object_list->apply_volumes_order();
 }
 
 std::vector<PlaterPresetComboBox*>& Sidebar::combos_filament()
@@ -1702,6 +1703,9 @@ struct Plater::priv
     void on_wipetower_moved(Vec3dEvent&);
     void on_wipetower_rotated(Vec3dEvent&);
     void on_update_geometry(Vec3dsEvent<2>&);
+#if ENABLE_SEQUENTIAL_LIMITS
+    void on_3dcanvas_mouse_dragging_started(SimpleEvent&);
+#endif // ENABLE_SEQUENTIAL_LIMITS
     void on_3dcanvas_mouse_dragging_finished(SimpleEvent&);
 
     void show_action_buttons(const bool is_ready_to_slice) const;
@@ -1878,6 +1882,9 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         view3D_canvas->Bind(EVT_GLCANVAS_INSTANCE_SCALED, [this](SimpleEvent&) { update(); });
         view3D_canvas->Bind(EVT_GLCANVAS_ENABLE_ACTION_BUTTONS, [this](Event<bool>& evt) { this->sidebar->enable_buttons(evt.data); });
         view3D_canvas->Bind(EVT_GLCANVAS_UPDATE_GEOMETRY, &priv::on_update_geometry, this);
+#if ENABLE_SEQUENTIAL_LIMITS
+        view3D_canvas->Bind(EVT_GLCANVAS_MOUSE_DRAGGING_STARTED, &priv::on_3dcanvas_mouse_dragging_started, this);
+#endif // ENABLE_SEQUENTIAL_LIMITS
         view3D_canvas->Bind(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED, &priv::on_3dcanvas_mouse_dragging_finished, this);
         view3D_canvas->Bind(EVT_GLCANVAS_TAB, [this](SimpleEvent&) { select_next_view_3D(); });
         view3D_canvas->Bind(EVT_GLCANVAS_RESETGIZMOS, [this](SimpleEvent&) { reset_all_gizmos(); });
@@ -2443,6 +2450,7 @@ std::vector<size_t> Plater::priv::load_model_objects(const ModelObjectPtrs &mode
 #endif /* AUTOPLACEMENT_ON_LOAD */
     for (ModelObject *model_object : model_objects) {
         auto *object = model.add_object(*model_object);
+        object->sort_volumes(wxGetApp().app_config->get("order_volumes") == "1");
         std::string object_name = object->name.empty() ? fs::path(object->input_file).filename().string() : object->name;
         obj_idxs.push_back(obj_count++);
 
@@ -2730,6 +2738,10 @@ void Plater::priv::reset()
     reset_gcode_toolpaths();
     gcode_result.reset();
 
+#if ENABLE_SEQUENTIAL_LIMITS
+    view3D->get_canvas3d()->reset_sequential_print_clearance();
+#endif // ENABLE_SEQUENTIAL_LIMITS
+
     // Stop and reset the Print content.
     this->background_process.reset();
     model.clear_objects();
@@ -2894,12 +2906,12 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 
     // If the update_background_process() was not called by the timer, kill the timer,
     // so the update_restart_background_process() will not be called again in vain.
-    this->background_process_timer.Stop();
+    background_process_timer.Stop();
     // Update the "out of print bed" state of ModelInstances.
-    this->update_print_volume_state();
+    update_print_volume_state();
     // Apply new config to the possibly running background task.
-    bool               was_running = this->background_process.running();
-    Print::ApplyStatus invalidated = this->background_process.apply(this->q->model(), wxGetApp().preset_bundle->full_config());
+    bool               was_running = background_process.running();
+    Print::ApplyStatus invalidated = background_process.apply(q->model(), wxGetApp().preset_bundle->full_config());
 
     // Just redraw the 3D canvas without reloading the scene to consume the update of the layer height profile.
     if (view3D->is_layers_editing_enabled())
@@ -2908,40 +2920,58 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
     if (invalidated == Print::APPLY_STATUS_INVALIDATED) {
         // Some previously calculated data on the Print was invalidated.
         // Hide the slicing results, as the current slicing status is no more valid.
-        this->sidebar->show_sliced_info_sizer(false);
+        sidebar->show_sliced_info_sizer(false);
         // Reset preview canvases. If the print has been invalidated, the preview canvases will be cleared.
         // Otherwise they will be just refreshed.
-        if (this->preview != nullptr) {
+        if (preview != nullptr) {
             // If the preview is not visible, the following line just invalidates the preview,
             // but the G-code paths or SLA preview are calculated first once the preview is made visible.
             reset_gcode_toolpaths();
-            this->preview->reload_print();
+            preview->reload_print();
         }
         // In FDM mode, we need to reload the 3D scene because of the wipe tower preview box.
         // In SLA mode, we need to reload the 3D scene every time to show the support structures.
-        if (this->printer_technology == ptSLA || (this->printer_technology == ptFFF && this->config->opt_bool("wipe_tower")))
+        if (printer_technology == ptSLA || (printer_technology == ptFFF && config->opt_bool("wipe_tower")))
             return_state |= UPDATE_BACKGROUND_PROCESS_REFRESH_SCENE;
     }
 
-    if ((invalidated != Print::APPLY_STATUS_UNCHANGED || force_validation) && ! this->background_process.empty()) {
+    if ((invalidated != Print::APPLY_STATUS_UNCHANGED || force_validation) && ! background_process.empty()) {
 		// The delayed error message is no more valid.
-		this->delayed_error_message.clear();
+		delayed_error_message.clear();
 		// The state of the Print changed, and it is non-zero. Let's validate it and give the user feedback on errors.
         std::string warning;
-        std::string err = this->background_process.validate(&warning);
+        std::string err = background_process.validate(&warning);
         if (err.empty()) {
 			notification_manager->set_all_slicing_errors_gray(true);
-            if (invalidated != Print::APPLY_STATUS_UNCHANGED && this->background_processing_enabled())
+            if (invalidated != Print::APPLY_STATUS_UNCHANGED && background_processing_enabled())
                 return_state |= UPDATE_BACKGROUND_PROCESS_RESTART;
 
             // Pass a warning from validation and either show a notification,
             // or hide the old one.
             process_validation_warning(warning);
+#if ENABLE_SEQUENTIAL_LIMITS
+            if (printer_technology == ptFFF) {
+                view3D->get_canvas3d()->reset_sequential_print_clearance();
+                view3D->get_canvas3d()->set_as_dirty();
+                view3D->get_canvas3d()->request_extra_frame();
+            }
+#endif // ENABLE_SEQUENTIAL_LIMITS
         } else {
 			// The print is not valid.
 			// Show error as notification.
             notification_manager->push_slicing_error_notification(err);
             return_state |= UPDATE_BACKGROUND_PROCESS_INVALID;
+#if ENABLE_SEQUENTIAL_LIMITS
+            if (printer_technology == ptFFF) {
+                const Print* print = background_process.fff_print();
+                Polygons polygons;
+                if (print->config().complete_objects)
+                    Print::sequential_print_horizontal_clearance_valid(*print, &polygons);
+                view3D->get_canvas3d()->set_sequential_print_clearance_visible(true);
+                view3D->get_canvas3d()->set_sequential_print_clearance_render_fill(true);
+                view3D->get_canvas3d()->set_sequential_print_clearance_polygons(polygons);
+            }
+#endif // ENABLE_SEQUENTIAL_LIMITS
         }
 
     } else if (! this->delayed_error_message.empty()) {
@@ -3077,8 +3107,7 @@ void Plater::priv::update_fff_scene()
     if (this->preview != nullptr)
         this->preview->reload_print();
     // In case this was MM print, wipe tower bounding box on 3D tab might need redrawing with exact depth:
-    view3D->reload_scene(true);
-	
+    view3D->reload_scene(true);	
 }
 
 void Plater::priv::update_sla_scene()
@@ -3218,7 +3247,7 @@ void Plater::priv::reload_from_disk()
             ModelVolume* old_volume = old_model_object->volumes[sel_v.volume_idx];
 
 #if ENABLE_ALLOW_NEGATIVE_Z
-            bool sinking = old_model_object->bounding_box().min.z() < 0.0;
+            bool sinking = old_model_object->bounding_box().min.z() < SINKING_Z_THRESHOLD;
 #endif // ENABLE_ALLOW_NEGATIVE_Z
 
             bool has_source = !old_volume->source.input_file.empty() && boost::algorithm::iequals(fs::path(old_volume->source.input_file).filename().string(), fs::path(path).filename().string());
@@ -3273,12 +3302,14 @@ void Plater::priv::reload_from_disk()
                         new_volume->convert_from_meters();
                     new_volume->supported_facets.assign(old_volume->supported_facets);
                     new_volume->seam_facets.assign(old_volume->seam_facets);
+                    new_volume->mmu_segmentation_facets.assign(old_volume->mmu_segmentation_facets);
                     std::swap(old_model_object->volumes[sel_v.volume_idx], old_model_object->volumes.back());
                     old_model_object->delete_volume(old_model_object->volumes.size() - 1);
 #if ENABLE_ALLOW_NEGATIVE_Z
                     if (!sinking)
 #endif // ENABLE_ALLOW_NEGATIVE_Z
                         old_model_object->ensure_on_bed();
+                    old_model_object->sort_volumes(wxGetApp().app_config->get("order_volumes") == "1");
 
                     sla::reproject_points_and_holes(old_model_object);
                 }
@@ -3345,13 +3376,14 @@ void Plater::priv::fix_through_netfabb(const int obj_idx, const int vol_idx/* = 
 
     ModelObject* mo = model.objects[obj_idx];
 
-    // If there are custom supports/seams, remove them. Fixed mesh
+    // If there are custom supports/seams/mmu segmentation, remove them. Fixed mesh
     // may be different and they would make no sense.
     bool paint_removed = false;
     for (ModelVolume* mv : mo->volumes) {
-        paint_removed |= ! mv->supported_facets.empty() || ! mv->seam_facets.empty();
+        paint_removed |= ! mv->supported_facets.empty() || ! mv->seam_facets.empty() || ! mv->mmu_segmentation_facets.empty();
         mv->supported_facets.clear();
         mv->seam_facets.clear();
+        mv->mmu_segmentation_facets.clear();
     }
     if (paint_removed) {
         // snapshot_time is captured by copy so the lambda knows where to undo/redo to.
@@ -3437,8 +3469,12 @@ void Plater::priv::set_current_panel(wxPanel* panel)
 
         // sets the canvas as dirty to force a render at the 1st idle event (wxWidgets IsShownOnScreen() is buggy and cannot be used reliably)
         view3D->set_as_dirty();
+#if ENABLE_SCROLLABLE_LEGEND
+        // reset cached size to force a resize on next call to render() to keep imgui in synch with canvas size
+        view3D->get_canvas3d()->reset_old_size();
+#endif // ENABLE_SCROLLABLE_LEGEND
         view_toolbar.select_item("3D");
-        if(notification_manager != nullptr)
+        if (notification_manager != nullptr)
             notification_manager->set_in_preview(false);
     }
     else if (current_panel == preview) {
@@ -3457,6 +3493,10 @@ void Plater::priv::set_current_panel(wxPanel* panel)
         preview->reload_print(true);
 
         preview->set_as_dirty();
+#if ENABLE_SCROLLABLE_LEGEND
+        // reset cached size to force a resize on next call to render() to keep imgui in synch with canvas size
+        preview->get_canvas3d()->reset_old_size();
+#endif // ENABLE_SCROLLABLE_LEGEND
         view_toolbar.select_item("Preview");
         if (notification_manager != nullptr)
             notification_manager->set_in_preview(true);
@@ -3837,13 +3877,20 @@ void Plater::priv::on_update_geometry(Vec3dsEvent<2>&)
     // TODO
 }
 
+#if ENABLE_SEQUENTIAL_LIMITS
+void Plater::priv::on_3dcanvas_mouse_dragging_started(SimpleEvent&)
+{
+    view3D->get_canvas3d()->reset_sequential_print_clearance();
+}
+#endif // ENABLE_SEQUENTIAL_LIMITS
+
 // Update the scene from the background processing,
 // if the update message was received during mouse manipulation.
 void Plater::priv::on_3dcanvas_mouse_dragging_finished(SimpleEvent&)
 {
-    if (this->delayed_scene_refresh) {
-        this->delayed_scene_refresh = false;
-        this->update_sla_scene();
+    if (delayed_scene_refresh) {
+        delayed_scene_refresh = false;
+        update_sla_scene();
     }
 }
 
@@ -4054,7 +4101,7 @@ bool Plater::priv::layers_height_allowed() const
 
     int obj_idx = get_selected_object_idx();
 #if ENABLE_ALLOW_NEGATIVE_Z
-    return 0 <= obj_idx && obj_idx < (int)model.objects.size() && model.objects[obj_idx]->bounding_box().max.z() > 0.0 &&
+    return 0 <= obj_idx && obj_idx < (int)model.objects.size() && model.objects[obj_idx]->bounding_box().max.z() > SINKING_Z_THRESHOLD &&
         config->opt_bool("variable_layer_height") && view3D->is_layers_editing_allowed();
 #else
     return 0 <= obj_idx && obj_idx < (int)model.objects.size() && config->opt_bool("variable_layer_height") && view3D->is_layers_editing_allowed();
@@ -5344,8 +5391,7 @@ bool Plater::export_3mf(const boost::filesystem::path& output_path)
 void Plater::export_3mf(const boost::filesystem::path& output_path)
 #endif // ENABLE_PROJECT_DIRTY_STATE
 {
-    if (p->model.objects.empty()
-     || canvas3D()->get_gizmos_manager().is_in_editing_mode(true))
+    if (p->model.objects.empty())
 #if ENABLE_PROJECT_DIRTY_STATE
         return false;
 #else
@@ -5900,6 +5946,18 @@ BoundingBoxf Plater::bed_shape_bb() const
     return p->bed_shape_bb();
 }
 
+#if ENABLE_GCODE_WINDOW
+void Plater::start_mapping_gcode_window()
+{
+    p->preview->get_canvas3d()->start_mapping_gcode_window();
+}
+
+void Plater::stop_mapping_gcode_window()
+{
+    p->preview->get_canvas3d()->stop_mapping_gcode_window();
+}
+#endif // ENABLE_GCODE_WINDOW
+
 void Plater::arrange()
 {
     p->m_ui_jobs.arrange();
@@ -5993,7 +6051,7 @@ void Plater::changed_objects(const std::vector<size_t>& object_idxs)
     for (size_t obj_idx : object_idxs) {
 #if ENABLE_ALLOW_NEGATIVE_Z
         if (obj_idx < p->model.objects.size()) {
-            if (p->model.objects[obj_idx]->bounding_box().min.z() >= 0.0)
+            if (p->model.objects[obj_idx]->bounding_box().min.z() >= SINKING_Z_THRESHOLD)
                 // re - align to Z = 0
                 p->model.objects[obj_idx]->ensure_on_bed();
         }

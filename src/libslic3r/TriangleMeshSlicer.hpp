@@ -12,8 +12,13 @@ struct MeshSlicingParams
 {
     enum class SlicingMode : uint32_t {
         // Regular slicing, maintain all contours and their orientation.
+        // slice_mesh_ex() applies ClipperLib::pftNonZero rule to the result of slice_mesh().
         Regular,
-        // Maintain all contours, orient all contours CCW, therefore all holes are being closed.
+        // For slicing 3DLabPrints plane models (aka to be compatible with S3D default strategy).
+        // slice_mesh_ex() applies ClipperLib::pftEvenOdd rule. slice_mesh() slices EvenOdd as Regular.
+        EvenOdd,
+        // Maintain all contours, orient all contours CCW.
+        // slice_mesh_ex() applies ClipperLib::pftNonZero rule, thus holes will be closed.
         Positive,
         // Orient all contours CCW and keep only the contour with the largest area.
         // This mode is useful for slicing complex objects in vase mode.
@@ -32,11 +37,11 @@ struct MeshSlicingParams
 
 struct MeshSlicingParamsEx : public MeshSlicingParams
 {
-    // Morphological closing operation when creating output expolygons.
+    // Morphological closing operation when creating output expolygons, unscaled.
     float         closing_radius { 0 };
-    // Positive offset applied when creating output expolygons.
+    // Positive offset applied when creating output expolygons, unscaled.
     float         extra_offset { 0 };
-    // Resolution for contour simplification, scaled!
+    // Resolution for contour simplification, unscaled.
     // 0 = don't simplify.
     double        resolution { 0 };
 };
@@ -76,7 +81,8 @@ void                            cut_mesh(
     const indexed_triangle_set      &mesh,
     float                            z,
     indexed_triangle_set            *upper,
-    indexed_triangle_set            *lower);
+    indexed_triangle_set            *lower,
+    bool                             triangulate_caps = true);
 
 }
 
