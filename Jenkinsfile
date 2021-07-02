@@ -64,7 +64,6 @@ pipeline {
             }
         }
 
-*/
         stage('ubuntu-focal') {
             agent {
                 docker { image 'vitexsoftware/ubuntu:stable' }
@@ -84,6 +83,7 @@ pipeline {
                 }
             }
         }
+*/
 
         stage('ubuntu-hirsute') {
             agent {
