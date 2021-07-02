@@ -145,12 +145,45 @@ void SLAPrint::Steps::hollow_model(SLAPrintObject &po)
 
 struct FaceHash {
 
+    // A 64 bit number's max hex digits
+    static constexpr size_t MAX_NUM_CHARS = 16;
+
     // A hash is created for each triangle to be identifiable. The hash uses
     // only the triangle's geometric traits, not the index in a particular mesh.
     std::unordered_set<std::string> facehash;
 
-    static std::string facekey(const Vec3i &face,
-                               const std::vector<Vec3f> &vertices)
+    // Returns the string in reverse, but that is ok for hashing
+    static std::array<char, MAX_NUM_CHARS + 1> to_chars(int64_t val)
+    {
+        std::array<char, MAX_NUM_CHARS + 1> ret;
+
+        static const constexpr char * Conv = "0123456789abcdef";
+
+        auto ptr = ret.begin();
+        auto uval = static_cast<uint64_t>(std::abs(val));
+        while (uval) {
+            *ptr = Conv[uval & 0xf];
+            ++ptr;
+            uval = uval >> 4;
+        }
+        if (val < 0) { *ptr = '-'; ++ptr; }
+        *ptr = '\0'; // C style string ending
+
+        return ret;
+    }
+
+    static std::string hash(const Vec<3, int64_t> &v)
+    {
+        std::string ret;
+        ret.reserve(3 * MAX_NUM_CHARS);
+
+        for (auto val : v)
+            ret += to_chars(val).data();
+
+        return ret;
+    }
+
+    static std::string facekey(const Vec3i &face, const std::vector<Vec3f> &vertices)
     {
         // Scale to integer to avoid floating points
         std::array<Vec<3, int64_t>, 3> pts = {
@@ -166,15 +199,13 @@ struct FaceHash {
         Vec<3, int64_t> c = a.cross(b) + (pts[0] + pts[1] + pts[2]) / 3;
 
         // Return a concatenated string representation of the coordinates
-        return float_to_string_decimal_point(c(0)) + float_to_string_decimal_point(c(1)) + float_to_string_decimal_point(c(2));
+        return hash(c);
     }
 
-    FaceHash(const indexed_triangle_set &its)
+    FaceHash (const indexed_triangle_set &its): facehash(its.indices.size())
     {
-        for (const Vec3i &face : its.indices) {
-            std::string keystr = facekey(face, its.vertices);
-            facehash.insert(keystr);
-        }
+        for (const Vec3i &face : its.indices)
+            facehash.insert(facekey(face, its.vertices));
     }
 
     bool find(const std::string &key)
@@ -397,6 +428,18 @@ void SLAPrint::Steps::drill_holes(SLAPrintObject &po)
 
     auto hollowed_mesh_cgal = MeshBoolean::cgal::triangle_mesh_to_cgal(hollowed_mesh);
 
+    if (!MeshBoolean::cgal::does_bound_a_volume(*hollowed_mesh_cgal)) {
+        po.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+            L("Mesh to be hollowed is not suitable for hollowing (does not "
+              "bound a volume)."));
+    }
+
+    if (!MeshBoolean::cgal::does_bound_a_volume(*holes_mesh_cgal)) {
+        po.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+            L("Unable to drill the current configuration of holes into the "
+              "model."));
+    }
+
     try {
         MeshBoolean::cgal::minus(*hollowed_mesh_cgal, *holes_mesh_cgal);
 
@@ -410,8 +453,7 @@ void SLAPrint::Steps::drill_holes(SLAPrintObject &po)
 
             sla::remove_inside_triangles(mesh_view, interior, exclude_mask);
         }
-
-    } catch (const std::runtime_error &) {
+    } catch (const Slic3r::RuntimeError &) {
         throw Slic3r::SlicingError(L(
             "Drilling holes into the mesh failed. "
             "This is usually caused by broken model. Try to fix it first."));
@@ -717,43 +759,6 @@ void SLAPrint::Steps::slice_supports(SLAPrintObject &po) {
     // status to the 3D preview to load the SLA slices.
     report_status(-2, "", SlicingStatus::RELOAD_SLA_PREVIEW);
 }
-
-//static ClipperPolygons polyunion(const ClipperPolygons &subjects)
-//{
-//    ClipperLib::Clipper clipper;
-
-//    bool closed = true;
-
-//    for(auto& path : subjects) {
-//        clipper.AddPath(path.Contour, ClipperLib::ptSubject, closed);
-//        clipper.AddPaths(path.Holes, ClipperLib::ptSubject, closed);
-//    }
-
-//    auto mode = ClipperLib::pftPositive;
-
-//    return libnest2d::clipper_execute(clipper, ClipperLib::ctUnion, mode, mode);
-//}
-
-//static ClipperPolygons polydiff(const ClipperPolygons &subjects, const ClipperPolygons& clips)
-//{
-//    ClipperLib::Clipper clipper;
-
-//    bool closed = true;
-
-//    for(auto& path : subjects) {
-//        clipper.AddPath(path.Contour, ClipperLib::ptSubject, closed);
-//        clipper.AddPaths(path.Holes, ClipperLib::ptSubject, closed);
-//    }
-
-//    for(auto& path : clips) {
-//        clipper.AddPath(path.Contour, ClipperLib::ptClip, closed);
-//        clipper.AddPaths(path.Holes, ClipperLib::ptClip, closed);
-//    }
-
-//    auto mode = ClipperLib::pftPositive;
-
-//    return libnest2d::clipper_execute(clipper, ClipperLib::ctDifference, mode, mode);
-//}
 
 // get polygons for all instances in the object
 static ExPolygons get_all_polygons(const SliceRecord& record, SliceOrigin o)

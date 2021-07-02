@@ -9,6 +9,7 @@
 
 #include "Selection.hpp"
 
+#include "libslic3r/enum_bitmask.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
@@ -24,6 +25,8 @@ namespace Slic3r {
 
 class Model;
 class ModelObject;
+enum class ModelObjectCutAttribute : int;
+using ModelObjectCutAttributes = enum_bitmask<ModelObjectCutAttribute>;
 class ModelInstance;
 class Print;
 class SLAPrint;
@@ -109,6 +112,10 @@ public:
     void                    update_searcher();
     void                    update_ui_from_settings();
 
+#ifdef _MSW_DARK_MODE
+    void                    show_mode_sizer(bool show);
+#endif
+
     std::vector<PlaterPresetComboBox*>&   combos_filament();
     Search::OptionsSearcher&        get_searcher();
     std::string&                    get_search_line();
@@ -186,7 +193,7 @@ public:
 
     // Called after the Preferences dialog is closed and the program settings are saved.
     // Update the UI based on the current preferences.
-    void update_ui_from_settings(bool apply_free_camera_correction = true);
+    void update_ui_from_settings();
 
     void select_all();
     void deselect_all();
@@ -204,7 +211,7 @@ public:
     void convert_unit(ConversionType conv_type);
     void toggle_layers_editing(bool enable);
 
-    void cut(size_t obj_idx, size_t instance_idx, coordf_t z, bool keep_upper = true, bool keep_lower = true, bool rotate_lower = false);
+    void cut(size_t obj_idx, size_t instance_idx, coordf_t z, ModelObjectCutAttributes attributes);
 
     void export_gcode(bool prefer_removable);
     void export_stl(bool extended = false, bool selection_only = false);
@@ -215,6 +222,7 @@ public:
     void export_3mf(const boost::filesystem::path& output_path = boost::filesystem::path());
 #endif // ENABLE_PROJECT_DIRTY_STATE
     void reload_from_disk();
+    void replace_with_stl();
     void reload_all_from_disk();
     bool has_toolpaths_to_export() const;
     void export_toolpaths_to_obj() const;
@@ -315,6 +323,7 @@ public:
     bool can_undo() const;
     bool can_redo() const;
     bool can_reload_from_disk() const;
+    bool can_replace_with_stl() const;
     bool can_mirror() const;
     bool can_split(bool to_objects) const;
 

@@ -62,9 +62,10 @@ ObjectDataViewModelNode::ObjectDataViewModelNode(ObjectDataViewModelNode* parent
     m_type(itInfo),
     m_extruder(wxEmptyString)
 {
-    m_name = info_type == InfoItemType::CustomSupports ? _L("Paint-on supports")
-           : info_type == InfoItemType::CustomSeam     ? _L("Paint-on seam")
-                                                       : _L("Variable layer height");
+    m_name           = info_type == InfoItemType::CustomSupports  ? _L("Paint-on supports") :
+                       info_type == InfoItemType::CustomSeam      ? _L("Paint-on seam") :
+                       info_type == InfoItemType::MmuSegmentation ? _L("Paint-on segmentation") :
+                                                                    _L("Variable layer height");
     m_info_item_type = info_type;
 }
 
@@ -170,7 +171,7 @@ void ObjectDataViewModelNode::update_settings_digest_bitmaps()
     if (bmp == nullptr) {
         std::vector<wxBitmap> bmps;
         for (auto& category : m_opt_categories)
-            bmps.emplace_back(SettingsFactory::get_category_bitmap(category));
+            bmps.emplace_back(SettingsFactory::get_category_bitmap(category, false));
         bmp = m_bitmap_cache->insert(scaled_bitmap_name, bmps);
     }
 

@@ -81,6 +81,7 @@
 #include "InstanceCheck.hpp"
 #include "NotificationManager.hpp"
 #include "PresetComboBoxes.hpp"
+#include "MsgDialog.hpp"
 #if ENABLE_PROJECT_DIRTY_STATE
 #include "ProjectDirtyStateManager.hpp"
 #endif // ENABLE_PROJECT_DIRTY_STATE
@@ -149,6 +150,7 @@ ObjectInfo::ObjectInfo(wxWindow *parent) :
     wxStaticBoxSizer(new wxStaticBox(parent, wxID_ANY, _L("Info")), wxVERTICAL)
 {
     GetStaticBox()->SetFont(wxGetApp().bold_font());
+    wxGetApp().UpdateDarkUI(GetStaticBox());
 
     auto *grid_sizer = new wxFlexGridSizer(4, 5, 15);
     grid_sizer->SetFlexibleDirection(wxHORIZONTAL);
@@ -224,6 +226,7 @@ SlicedInfo::SlicedInfo(wxWindow *parent) :
     wxStaticBoxSizer(new wxStaticBox(parent, wxID_ANY, _L("Sliced Info")), wxVERTICAL)
 {
     GetStaticBox()->SetFont(wxGetApp().bold_font());
+    wxGetApp().UpdateDarkUI(GetStaticBox());
 
     auto *grid_sizer = new wxFlexGridSizer(2, 5, 15);
     grid_sizer->SetFlexibleDirection(wxVERTICAL);
@@ -283,6 +286,7 @@ public:
     void            Show(const bool is_fff) override;
 
     void            msw_rescale();
+    void            sys_color_changed();
 };
 
 void FreqChangedParams::msw_rescale()
@@ -292,6 +296,17 @@ void FreqChangedParams::msw_rescale()
 
     for (auto btn: m_empty_buttons)
         btn->msw_rescale();
+}
+
+void FreqChangedParams::sys_color_changed()
+{
+    m_og->sys_color_changed();
+    m_og_sla->sys_color_changed();
+
+    for (auto btn: m_empty_buttons)
+        btn->msw_rescale();
+
+    wxGetApp().UpdateDarkUI(m_wiping_dialog_button, true);
 }
 
 FreqChangedParams::FreqChangedParams(wxWindow* parent) :
@@ -411,6 +426,8 @@ FreqChangedParams::FreqChangedParams(wxWindow* parent) :
     auto wiping_dialog_btn = [this](wxWindow* parent) {
         m_wiping_dialog_button = new wxButton(parent, wxID_ANY, _L("Purging volumes") + dots, wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
         m_wiping_dialog_button->SetFont(wxGetApp().normal_font());
+        wxGetApp().UpdateDarkUI(m_wiping_dialog_button, true);
+
         auto sizer = new wxBoxSizer(wxHORIZONTAL);
         sizer->Add(m_wiping_dialog_button, 0, wxALIGN_CENTER_VERTICAL);
         m_wiping_dialog_button->Bind(wxEVT_BUTTON, ([parent](wxCommandEvent& e)
@@ -566,7 +583,7 @@ struct Sidebar::priv
     wxScrolledWindow *scrolled;
     wxPanel* presets_panel; // Used for MSW better layouts
 
-    ModeSizer  *mode_sizer;
+    ModeSizer  *mode_sizer {nullptr};
     wxFlexGridSizer *sizer_presets;
     PlaterPresetComboBox *combo_print;
     std::vector<PlaterPresetComboBox*> combos_filament;
@@ -640,7 +657,12 @@ Sidebar::Sidebar(Plater *parent)
 
     SetFont(wxGetApp().normal_font());
 #ifndef __APPLE__
+#ifdef _WIN32
+    wxGetApp().UpdateDarkUI(this);
+    wxGetApp().UpdateDarkUI(p->scrolled);
+#else
     SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+#endif
 #endif
 
     // Sizer in the scrolled area
@@ -648,7 +670,7 @@ Sidebar::Sidebar(Plater *parent)
     p->scrolled->SetSizer(scrolled_sizer);
 
     // Sizer with buttons for mode changing
-    p->mode_sizer = new ModeSizer(p->scrolled);
+    p->mode_sizer = new ModeSizer(p->scrolled, int(0.5 * wxGetApp().em_unit()));
 
     // The preset chooser
     p->sizer_presets = new wxFlexGridSizer(10, 1, 1, 2);
@@ -660,6 +682,7 @@ Sidebar::Sidebar(Plater *parent)
     p->scrolled->SetDoubleBuffered(true);
 
     p->presets_panel = new wxPanel(p->scrolled, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
+    wxGetApp().UpdateDarkUI(p->presets_panel);
     p->presets_panel->SetSizer(p->sizer_presets);
 
     is_msw = true;
@@ -731,7 +754,8 @@ Sidebar::Sidebar(Plater *parent)
     p->sliced_info = new SlicedInfo(p->scrolled);
 
     // Sizer in the scrolled area
-    scrolled_sizer->Add(p->mode_sizer, 0, wxALIGN_CENTER_HORIZONTAL/*RIGHT | wxBOTTOM | wxRIGHT, 5*/);
+    if (p->mode_sizer)
+        scrolled_sizer->Add(p->mode_sizer, 0, wxALIGN_CENTER_HORIZONTAL);
     is_msw ?
         scrolled_sizer->Add(p->presets_panel, 0, wxEXPAND | wxLEFT, margin_5) :
         scrolled_sizer->Add(p->sizer_presets, 0, wxEXPAND | wxLEFT, margin_5);
@@ -763,11 +787,16 @@ Sidebar::Sidebar(Plater *parent)
     // regular buttons "Slice now" and "Export G-code" 
 
 //    const int scaled_height = p->btn_eject_device->GetBitmapHeight() + 4;
+#ifdef _WIN32
+    const int scaled_height = p->btn_export_gcode_removable->GetBitmapHeight();
+#else
     const int scaled_height = p->btn_export_gcode_removable->GetBitmapHeight() + 4;
+#endif
     auto init_btn = [this](wxButton **btn, wxString label, const int button_height) {
         *btn = new wxButton(this, wxID_ANY, label, wxDefaultPosition,
                             wxSize(-1, button_height), wxBU_EXACTFIT);
         (*btn)->SetFont(wxGetApp().bold_font());
+        wxGetApp().UpdateDarkUI((*btn), true);
     };
 
     init_btn(&p->btn_export_gcode, _L("Export G-code") + dots , scaled_height);
@@ -779,8 +808,8 @@ Sidebar::Sidebar(Plater *parent)
 
     auto* complect_btns_sizer = new wxBoxSizer(wxHORIZONTAL);
     complect_btns_sizer->Add(p->btn_export_gcode, 1, wxEXPAND);
-    complect_btns_sizer->Add(p->btn_send_gcode);
-	complect_btns_sizer->Add(p->btn_export_gcode_removable);
+    complect_btns_sizer->Add(p->btn_send_gcode, 0, wxLEFT, margin_5);
+	complect_btns_sizer->Add(p->btn_export_gcode_removable, 0, wxLEFT, margin_5);
 //    complect_btns_sizer->Add(p->btn_eject_device);
 	
 
@@ -916,13 +945,16 @@ void Sidebar::update_presets(Preset::Type preset_type)
 
 void Sidebar::update_mode_sizer() const
 {
-    p->mode_sizer->SetMode(m_mode);
+    if (p->mode_sizer)
+        p->mode_sizer->SetMode(m_mode);
 }
 
 void Sidebar::change_top_border_for_mode_sizer(bool increase_border)
 {
-    p->mode_sizer->set_items_flag(increase_border ? wxTOP : 0);
-    p->mode_sizer->set_items_border(increase_border ? int(0.5 * wxGetApp().em_unit()) : 0);
+    if (p->mode_sizer) {
+        p->mode_sizer->set_items_flag(increase_border ? wxTOP : 0);
+        p->mode_sizer->set_items_border(increase_border ? int(0.5 * wxGetApp().em_unit()) : 0);
+    }
 }
 
 void Sidebar::update_reslice_btn_tooltip() const
@@ -937,7 +969,8 @@ void Sidebar::msw_rescale()
 {
     SetMinSize(wxSize(40 * wxGetApp().em_unit(), -1));
 
-    p->mode_sizer->msw_rescale();
+    if (p->mode_sizer)
+        p->mode_sizer->msw_rescale();
 
     for (PlaterPresetComboBox* combo : std::vector<PlaterPresetComboBox*> { p->combo_print,
                                                                 p->combo_sla_print,
@@ -958,7 +991,11 @@ void Sidebar::msw_rescale()
     p->btn_send_gcode->msw_rescale();
 //    p->btn_eject_device->msw_rescale();
 	p->btn_export_gcode_removable->msw_rescale();
-    const int scaled_height = p->btn_export_gcode_removable->GetBitmap().GetHeight() + 4;
+#ifdef _WIN32
+    const int scaled_height = p->btn_export_gcode_removable->GetBitmapHeight();
+#else
+    const int scaled_height = p->btn_export_gcode_removable->GetBitmapHeight() + 4;
+#endif
     p->btn_export_gcode->SetMinSize(wxSize(-1, scaled_height));
     p->btn_reslice     ->SetMinSize(wxSize(-1, scaled_height));
 
@@ -967,19 +1004,30 @@ void Sidebar::msw_rescale()
 
 void Sidebar::sys_color_changed()
 {
-#ifdef __WXMSW__
-    SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+#ifdef _WIN32
+    wxWindowUpdateLocker noUpdates(this);
+
+    for (wxWindow* win : std::vector<wxWindow*>{ this, p->sliced_info->GetStaticBox(), p->object_info->GetStaticBox(), p->btn_reslice, p->btn_export_gcode })
+        wxGetApp().UpdateDarkUI(win);
+    for (wxWindow* win : std::vector<wxWindow*>{ p->scrolled, p->presets_panel })
+        wxGetApp().UpdateAllStaticTextDarkUI(win);
+    for (wxWindow* btn : std::vector<wxWindow*>{ p->btn_reslice, p->btn_export_gcode })
+        wxGetApp().UpdateDarkUI(btn, true);
+
+    if (p->mode_sizer)
+        p->mode_sizer->msw_rescale();
+    p->frequently_changed_parameters->sys_color_changed();
+    p->object_settings->sys_color_changed();
 #endif
 
     for (PlaterPresetComboBox* combo : std::vector<PlaterPresetComboBox*>{  p->combo_print,
                                                                 p->combo_sla_print,
                                                                 p->combo_sla_material,
                                                                 p->combo_printer })
-        combo->msw_rescale();
+        combo->sys_color_changed();
     for (PlaterPresetComboBox* combo : p->combos_filament)
-        combo->msw_rescale();
+        combo->sys_color_changed();
 
-    p->object_list->msw_rescale();
     p->object_list->sys_color_changed();
     p->object_manipulation->sys_color_changed();
     p->object_layers->sys_color_changed();
@@ -1352,6 +1400,12 @@ void Sidebar::collapse(bool collapse)
         wxGetApp().app_config->set("collapsed_sidebar", collapse ? "1" : "0");
 }
 
+#ifdef _MSW_DARK_MODE
+void Sidebar::show_mode_sizer(bool show)
+{
+    p->mode_sizer->Show(show);
+}
+#endif
 
 void Sidebar::update_ui_from_settings()
 {
@@ -1531,7 +1585,8 @@ struct Plater::priv
         if (dirty_state.is_dirty()) {
             MainFrame* mainframe = wxGetApp().mainframe;
             if (mainframe->can_save_as()) {
-                wxMessageDialog dlg(mainframe, _L("Do you want to save the changes to the current project ?"), wxString(SLIC3R_APP_NAME), wxYES_NO | wxCANCEL);
+                //wxMessageDialog dlg(mainframe, _L("Do you want to save the changes to the current project ?"), wxString(SLIC3R_APP_NAME), wxYES_NO | wxCANCEL);
+                MessageDialog dlg(mainframe, _L("Do you want to save the changes to the current project ?"), wxString(SLIC3R_APP_NAME), wxYES_NO | wxCANCEL);
                 int res = dlg.ShowModal();
                 if (res == wxID_YES)
                     mainframe->save_project_as(wxGetApp().plater()->get_project_filename());
@@ -1586,7 +1641,8 @@ struct Plater::priv
     void reset_gcode_toolpaths();
 
     void reset_all_gizmos();
-    void update_ui_from_settings(bool apply_free_camera_correction = true);
+    void apply_free_camera_correction(bool apply = true);
+    void update_ui_from_settings();
     void update_main_toolbar_tooltips();
     std::shared_ptr<ProgressStatusBar> statusbar();
     std::string get_config(const std::string &key) const;
@@ -1671,6 +1727,7 @@ struct Plater::priv
 	}
     void export_gcode(fs::path output_path, bool output_path_on_removable_media, PrintHostJob upload_job);
     void reload_from_disk();
+    void replace_with_stl();
     void reload_all_from_disk();
     void fix_through_netfabb(const int obj_idx, const int vol_idx = -1);
 
@@ -1728,6 +1785,7 @@ struct Plater::priv
     bool can_set_instance_to_object() const;
     bool can_mirror() const;
     bool can_reload_from_disk() const;
+    bool can_replace_with_stl() const;
     bool can_split(bool to_objects) const;
 
     void generate_thumbnail(ThumbnailData& data, unsigned int w, unsigned int h, bool printable_only, bool parts_only, bool show_bed, bool transparent_background);
@@ -2064,6 +2122,13 @@ void Plater::priv::select_view(const std::string& direction)
         preview->select_view(direction);
 }
 
+void Plater::priv::apply_free_camera_correction(bool apply/* = true*/)
+{
+    camera.set_type(wxGetApp().app_config->get("use_perspective_camera"));
+    if (apply && wxGetApp().app_config->get("use_free_camera") != "1")
+        camera.recover_from_free_camera();
+}
+
 void Plater::priv::select_view_3D(const std::string& name)
 {
     if (name == "3D")
@@ -2071,7 +2136,7 @@ void Plater::priv::select_view_3D(const std::string& name)
     else if (name == "Preview")
         set_current_panel(preview);
 
-    wxGetApp().update_ui_from_settings(false);
+    apply_free_camera_correction(false);
 }
 
 void Plater::priv::select_next_view_3D()
@@ -2103,11 +2168,9 @@ void Plater::priv::reset_all_gizmos()
 
 // Called after the Preferences dialog is closed and the program settings are saved.
 // Update the UI based on the current preferences.
-void Plater::priv::update_ui_from_settings(bool apply_free_camera_correction)
+void Plater::priv::update_ui_from_settings()
 {
-    camera.set_type(wxGetApp().app_config->get("use_perspective_camera"));
-    if (apply_free_camera_correction && wxGetApp().app_config->get("use_free_camera") != "1")
-        camera.recover_from_free_camera();
+    apply_free_camera_correction();
 
     view3D->get_canvas3d()->update_ui_from_settings();
     preview->get_canvas3d()->update_ui_from_settings();
@@ -2186,7 +2249,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 DynamicPrintConfig config;
                 {
                     DynamicPrintConfig config_loaded;
-                    model = Slic3r::Model::read_from_archive(path.string(), &config_loaded, false, load_config);
+                    ConfigSubstitutionContext config_substitutions{ ForwardCompatibilitySubstitutionRule::Enable };
+                    model = Slic3r::Model::read_from_archive(path.string(), &config_loaded, &config_substitutions, only_if(load_config, Model::LoadAttribute::CheckVersion));
                     if (load_config && !config_loaded.empty()) {
                         // Based on the printer technology field found in the loaded config, select the base for the config,
                         PrinterTechnology printer_technology = Preset::printer_technology(config_loaded);
@@ -2209,6 +2273,12 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             static_cast<const ConfigBase&>(SLAFullPrintConfig::defaults()));
                         // and place the loaded config over the base.
                         config += std::move(config_loaded);
+                    }
+                    if (! config_substitutions.empty()) {
+                        // TODO:
+                        show_error(nullptr, GUI::format(_L("Loading profiles found following incompatibilities."
+                            " To recover these files, incompatible values were changed to default values."
+                            " But data in files won't be changed until you save them in PrusaSlicer.")));
                     }
 
                     this->model.custom_gcode_per_print_z = model.custom_gcode_per_print_z;
@@ -2279,7 +2349,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 }
             }
             else {
-                model = Slic3r::Model::read_from_file(path.string(), nullptr, false, load_config);
+                model = Slic3r::Model::read_from_file(path.string(), nullptr, nullptr, only_if(load_config, Model::LoadAttribute::CheckVersion));
                 for (auto obj : model.objects)
                     if (obj->name.empty())
                         obj->name = fs::path(obj->input_file).filename().string();
@@ -2303,7 +2373,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     // Convert even if the object is big.
                     convert_from_imperial_units(model, false);
                 else if (model.looks_like_saved_in_meters()) {
-                    wxMessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
+                    //wxMessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
+                    MessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
                         "The object in file %s looks like saved in meters.\n"
                         "Should I consider it as a saved in meters and convert it?",
                         "Some objects in file %s look like saved in meters.\n"
@@ -2314,7 +2385,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         model.convert_from_meters(true);
                 }
                 else if (model.looks_like_imperial_units()) {
-                    wxMessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
+                    //wxMessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
+                    MessageDialog msg_dlg(q, format_wxstr(_L_PLURAL(
                         "The object in file %s looks like saved in inches.\n"
                         "Should I consider it as a saved in inches and convert it?",
                         "Some objects in file %s look like saved in inches.\n"
@@ -2326,7 +2398,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 }
 
                 if (model.looks_like_multipart_object()) {
-                    wxMessageDialog msg_dlg(q, _L(
+                    //wxMessageDialog msg_dlg(q, _L(
+                    MessageDialog msg_dlg(q, _L(
                         "This file contains several objects positioned at multiple heights.\n"
                         "Instead of considering them as multiple objects, should I consider\n"
                         "this file as a single object having multiple parts?") + "\n",
@@ -2337,7 +2410,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 }
             }
             else if ((wxGetApp().get_mode() == comSimple) && (type_3mf || type_any_amf) && model_has_advanced_features(model)) {
-                wxMessageDialog msg_dlg(q, _L("This file cannot be loaded in a simple mode. Do you want to switch to an advanced mode?")+"\n",
+                //wxMessageDialog msg_dlg(q, _L("This file cannot be loaded in a simple mode. Do you want to switch to an advanced mode?")+"\n",
+                MessageDialog msg_dlg(q, _L("This file cannot be loaded in a simple mode. Do you want to switch to an advanced mode?")+"\n",
                     _L("Detected advanced data"), wxICON_WARNING | wxYES | wxNO);
                 if (msg_dlg.ShowModal() == wxID_YES) {
                     Slic3r::GUI::wxGetApp().save_mode(comAdvanced);
@@ -2389,7 +2463,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     }
 
     if (new_model != nullptr && new_model->objects.size() > 1) {
-        wxMessageDialog msg_dlg(q, _L(
+        //wxMessageDialog msg_dlg(q, _L(
+        MessageDialog msg_dlg(q, _L(
                 "Multiple objects were loaded for a multi-material printer.\n"
                 "Instead of considering them as multiple objects, should I consider\n"
                 "these files to represent a single object having multiple parts?") + "\n",
@@ -3118,6 +3193,108 @@ void Plater::priv::update_sla_scene()
     this->update_restart_background_process(true, true);
 }
 
+void Plater::priv::replace_with_stl()
+{
+    const Selection& selection = get_selection();
+
+    if (selection.is_wipe_tower() || get_selection().get_volume_idxs().size() != 1)
+        return;
+
+    const GLVolume* v = selection.get_volume(*selection.get_volume_idxs().begin());
+    int object_idx = v->object_idx();
+    int volume_idx = v->volume_idx();
+
+    // collects paths of files to load
+
+    const ModelObject* object = model.objects[object_idx];
+    const ModelVolume* volume = object->volumes[volume_idx];
+
+    fs::path input_path;
+    if (!volume->source.input_file.empty() && fs::exists(volume->source.input_file))
+        input_path = volume->source.input_file;
+
+    wxString title = _L("Please select the file to replace");
+    title += ":";
+    wxFileDialog dialog(q, title, "", from_u8(input_path.filename().string()), file_wildcards(FT_MODEL), wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+
+    fs::path out_path = dialog.GetPath().ToUTF8().data();
+    if (out_path.empty()) {
+        MessageDialog dlg(q, _L("File for the replace wasn't selected"), _L("Error during replace"), wxOK | wxOK_DEFAULT | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    wxString fail_replace;
+
+    const auto& path = out_path.string();
+    wxBusyCursor wait;
+    wxBusyInfo info(_L("Replace from:") + " " + from_u8(path), q->get_current_canvas3D()->get_wxglcanvas());
+
+    Model new_model;
+    try {
+        new_model = Model::read_from_file(path, nullptr, nullptr, Model::LoadAttribute::AddDefaultInstances);
+        for (ModelObject* model_object : new_model.objects) {
+            model_object->center_around_origin();
+            model_object->ensure_on_bed();
+        }
+    }
+    catch (std::exception&) {
+        // error while loading
+        return;
+    }
+
+    if (new_model.objects.size() > 1 || new_model.objects[0]->volumes.size() > 1) {
+        MessageDialog dlg(q, _L("Unable to replace with more than one volume"), _L("Error during replace"), wxOK | wxOK_DEFAULT | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    Plater::TakeSnapshot snapshot(q, _L("Replace with STL"));
+
+    ModelObject* old_model_object = model.objects[object_idx];
+    ModelVolume* old_volume = old_model_object->volumes[volume_idx];
+
+#if ENABLE_ALLOW_NEGATIVE_Z
+    bool sinking = old_model_object->bounding_box().min.z() < SINKING_Z_THRESHOLD;
+#endif // ENABLE_ALLOW_NEGATIVE_Z
+
+    ModelObject* new_model_object = new_model.objects[0];
+    old_model_object->add_volume(*new_model_object->volumes[0]);
+    ModelVolume* new_volume = old_model_object->volumes.back();
+    new_volume->set_new_unique_id();
+    new_volume->config.apply(old_volume->config);
+    new_volume->set_type(old_volume->type());
+    new_volume->set_material_id(old_volume->material_id());
+    new_volume->set_transformation(old_volume->get_transformation());
+    new_volume->translate(new_volume->get_transformation().get_matrix(true) * (new_volume->source.mesh_offset - old_volume->source.mesh_offset));
+    if (old_volume->source.is_converted_from_inches)
+        new_volume->convert_from_imperial_units();
+    if (old_volume->source.is_converted_from_meters)
+        new_volume->convert_from_meters();
+    new_volume->supported_facets.assign(old_volume->supported_facets);
+    new_volume->seam_facets.assign(old_volume->seam_facets);
+    new_volume->mmu_segmentation_facets.assign(old_volume->mmu_segmentation_facets);
+    std::swap(old_model_object->volumes[volume_idx], old_model_object->volumes.back());
+    old_model_object->delete_volume(old_model_object->volumes.size() - 1);
+#if ENABLE_ALLOW_NEGATIVE_Z
+    if (!sinking)
+#endif // ENABLE_ALLOW_NEGATIVE_Z
+        old_model_object->ensure_on_bed();
+    old_model_object->sort_volumes(wxGetApp().app_config->get("order_volumes") == "1");
+
+    sla::reproject_points_and_holes(old_model_object);    
+
+    // update 3D scene
+    update();
+
+    // new GLVolumes have been created at this point, so update their printable state
+    for (size_t i = 0; i < model.objects.size(); ++i) {
+        view3D->get_canvas3d()->update_instance_printable_state_for_object(i);
+    }
+}
+
 void Plater::priv::reload_from_disk()
 {
     Plater::TakeSnapshot snapshot(q, _L("Reload from disk"));
@@ -3208,7 +3385,8 @@ void Plater::priv::reload_from_disk()
         }
         else {
             wxString message = _L("It is not allowed to change the file to reload") + " (" + from_u8(search.filename().string()) + ").\n" + _L("Do you want to retry") + " ?";
-            wxMessageDialog dlg(q, message, wxMessageBoxCaptionStr, wxYES_NO | wxYES_DEFAULT | wxICON_QUESTION);
+            //wxMessageDialog dlg(q, message, wxMessageBoxCaptionStr, wxYES_NO | wxYES_DEFAULT | wxICON_QUESTION);
+            MessageDialog dlg(q, message, wxMessageBoxCaptionStr, wxYES_NO | wxYES_DEFAULT | wxICON_QUESTION);
             if (dlg.ShowModal() != wxID_YES)
                 return;
         }
@@ -3229,7 +3407,7 @@ void Plater::priv::reload_from_disk()
         Model new_model;
         try
         {
-            new_model = Model::read_from_file(path, nullptr, true, false);
+            new_model = Model::read_from_file(path, nullptr, nullptr, Model::LoadAttribute::AddDefaultInstances);
             for (ModelObject* model_object : new_model.objects) {
                 model_object->center_around_origin();
                 model_object->ensure_on_bed();
@@ -3322,7 +3500,8 @@ void Plater::priv::reload_from_disk()
         for (const wxString& s : fail_list) {
             message += s + "\n";
         }
-        wxMessageDialog dlg(q, message, _L("Error during reload"), wxOK | wxOK_DEFAULT | wxICON_WARNING);
+        //wxMessageDialog dlg(q, message, _L("Error during reload"), wxOK | wxOK_DEFAULT | wxICON_WARNING);
+        MessageDialog dlg(q, message, _L("Error during reload"), wxOK | wxOK_DEFAULT | wxICON_WARNING);
         dlg.ShowModal();
     }
 
@@ -3698,7 +3877,8 @@ bool Plater::priv::warnings_dialog()
 			text += it.first.message;
 	}
 	//text += "\n\nDo you still wish to export?";
-	wxMessageDialog msg_wingow(this->q, from_u8(text), wxString(SLIC3R_APP_NAME " ") + _L("generated warnings"), wxOK);
+	//wxMessageDialog msg_wingow(this->q, from_u8(text), wxString(SLIC3R_APP_NAME " ") + _L("generated warnings"), wxOK);
+	MessageDialog msg_wingow(this->q, from_u8(text), wxString(SLIC3R_APP_NAME " ") + _L("generated warnings"), wxOK);
 	const auto res = msg_wingow.ShowModal();
 	return res == wxID_OK;
 
@@ -4113,6 +4293,11 @@ bool Plater::priv::can_mirror() const
     return get_selection().is_from_single_instance();
 }
 
+bool Plater::priv::can_replace_with_stl() const
+{
+    return get_selection().get_volume_idxs().size() == 1;
+}
+
 bool Plater::priv::can_reload_from_disk() const
 {
     // struct to hold selected ModelVolumes by their indices
@@ -4433,7 +4618,9 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
             // Switch to the other printer technology. Switch to the last printer active for that particular technology.
             AppConfig *app_config = wxGetApp().app_config;
             app_config->set("presets", "printer", (new_printer_technology == ptFFF) ? m_last_fff_printer_profile_name : m_last_sla_printer_profile_name);
-            wxGetApp().preset_bundle->load_presets(*app_config);
+            //FIXME Why are we reloading the whole preset bundle here? Please document. This is fishy and it is unnecessarily expensive.
+            // Anyways, don't report any config value substitutions, they have been already reported to the user at application start up.
+            wxGetApp().preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSilent);
 			// load_current_presets() calls Tab::load_current_preset() -> TabPrint::update() -> Object_list::update_and_show_object_settings_item(),
 			// but the Object list still keeps pointer to the old Model. Avoid a crash by removing selection first.
 			this->sidebar->obj_list()->unselect_objects();
@@ -4726,7 +4913,8 @@ void Plater::load_gcode(const wxString& filename)
     p->preview->get_canvas3d()->zoom_to_gcode();
 
     if (p->preview->get_canvas3d()->get_gcode_layers_zs().empty()) {
-        wxMessageDialog(this, _L("The selected file") + ":\n" + filename + "\n" + _L("does not contain valid gcode."),
+        //wxMessageDialog(this, _L("The selected file") + ":\n" + filename + "\n" + _L("does not contain valid gcode."),
+        MessageDialog(this, _L("The selected file") + ":\n" + filename + "\n" + _L("does not contain valid gcode."),
             wxString(GCODEVIEWER_APP_NAME) + " - " + _L("Error while loading .gcode file"), wxCLOSE | wxICON_WARNING | wxCENTRE).ShowModal();
         set_project_filename(wxEmptyString);
     }
@@ -4838,7 +5026,8 @@ bool Plater::load_files(const wxArrayString& filenames)
         }
 
         if (paths.size() > 1) {
-            wxMessageDialog(static_cast<wxWindow*>(this), _L("You can open only one .gcode file at a time."),
+            //wxMessageDialog(static_cast<wxWindow*>(this), _L("You can open only one .gcode file at a time."),
+            MessageDialog(static_cast<wxWindow*>(this), _L("You can open only one .gcode file at a time."),
                 wxString(SLIC3R_APP_NAME) + " - " + _L("Drag and drop G-code file"), wxCLOSE | wxICON_WARNING | wxCENTRE).ShowModal();
             return false;
         }
@@ -4942,7 +5131,7 @@ void Plater::update() { p->update(); }
 
 void Plater::stop_jobs() { p->m_ui_jobs.stop_all(); }
 
-void Plater::update_ui_from_settings(bool apply_free_camera_correction) { p->update_ui_from_settings(apply_free_camera_correction); }
+void Plater::update_ui_from_settings() { p->update_ui_from_settings(); }
 
 void Plater::select_view(const std::string& direction) { p->select_view(direction); }
 
@@ -4968,7 +5157,8 @@ void Plater::reset() { p->reset(); }
 void Plater::reset_with_confirm()
 {
     if (p->model.objects.empty() ||
-        wxMessageDialog(static_cast<wxWindow*>(this), _L("All objects will be removed, continue?"), wxString(SLIC3R_APP_NAME) + " - " + _L("Delete all"), wxYES_NO | wxCANCEL | wxYES_DEFAULT | wxCENTRE).ShowModal() == wxID_YES)
+        //wxMessageDialog(static_cast<wxWindow*>(this), _L("All objects will be removed, continue?"), wxString(SLIC3R_APP_NAME) + " - " + _L("Delete all"), wxYES_NO | wxCANCEL | wxYES_DEFAULT | wxCENTRE).ShowModal() == wxID_YES)
+        MessageDialog(static_cast<wxWindow*>(this), _L("All objects will be removed, continue?"), wxString(SLIC3R_APP_NAME) + " - " + _L("Delete all"), wxYES_NO | wxCANCEL | wxYES_DEFAULT | wxCENTRE).ShowModal() == wxID_YES)
         reset();
 }
 
@@ -5041,6 +5231,26 @@ void Plater::decrease_instances(size_t num)
     this->p->schedule_background_process();
 }
 
+static long GetNumberFromUser(  const wxString& msg,
+                                const wxString& prompt,
+                                const wxString& title,
+                                long value,
+                                long min,
+                                long max,
+                                wxWindow* parent)
+{
+#ifdef _WIN32
+    wxNumberEntryDialog dialog(parent, msg, prompt, title, value, min, max, wxDefaultPosition);
+    wxGetApp().UpdateDlgDarkUI(&dialog);
+    if (dialog.ShowModal() == wxID_OK)
+        return dialog.GetValue();
+
+    return -1;
+#else
+    return wxGetNumberFromUser(msg, prompt, title, value, min, max, parent);
+#endif
+}
+
 void Plater::set_number_of_copies(/*size_t num*/)
 {
     int obj_idx = p->get_selected_object_idx();
@@ -5049,7 +5259,7 @@ void Plater::set_number_of_copies(/*size_t num*/)
 
     ModelObject* model_object = p->model.objects[obj_idx];
 
-    const int num = wxGetNumberFromUser( " ", _L("Enter the number of copies:"),
+    const int num = GetNumberFromUser( " ", _L("Enter the number of copies:"),
                                     _L("Copies of the selected object"), model_object->instances.size(), 0, 1000, this );
     if (num < 0)
         return;
@@ -5117,21 +5327,20 @@ void Plater::toggle_layers_editing(bool enable)
         wxPostEvent(canvas3D()->get_wxglcanvas(), SimpleEvent(EVT_GLTOOLBAR_LAYERSEDITING));
 }
 
-void Plater::cut(size_t obj_idx, size_t instance_idx, coordf_t z, bool keep_upper, bool keep_lower, bool rotate_lower)
+void Plater::cut(size_t obj_idx, size_t instance_idx, coordf_t z, ModelObjectCutAttributes attributes)
 {
     wxCHECK_RET(obj_idx < p->model.objects.size(), "obj_idx out of bounds");
     auto *object = p->model.objects[obj_idx];
 
     wxCHECK_RET(instance_idx < object->instances.size(), "instance_idx out of bounds");
 
-    if (!keep_upper && !keep_lower) {
+    if (! attributes.has(ModelObjectCutAttribute::KeepUpper) && ! attributes.has(ModelObjectCutAttribute::KeepLower))
         return;
-    }
 
     Plater::TakeSnapshot snapshot(this, _L("Cut by Plane"));
 
     wxBusyCursor wait;
-    const auto new_objects = object->cut(instance_idx, z, keep_upper, keep_lower, rotate_lower);
+    const auto new_objects = object->cut(instance_idx, z, attributes);
 
     remove(obj_idx);
     p->load_model_objects(new_objects);
@@ -5139,9 +5348,7 @@ void Plater::cut(size_t obj_idx, size_t instance_idx, coordf_t z, bool keep_uppe
     Selection& selection = p->get_selection();
     size_t last_id = p->model.objects.size() - 1;
     for (size_t i = 0; i < new_objects.size(); ++i)
-    {
         selection.add_object((unsigned int)(last_id - i), i == 0);
-    }
 }
 
 void Plater::export_gcode(bool prefer_removable)
@@ -5452,6 +5659,11 @@ void Plater::export_3mf(const boost::filesystem::path& output_path)
 void Plater::reload_from_disk()
 {
     p->reload_from_disk();
+}
+
+void Plater::replace_with_stl()
+{
+    p->replace_with_stl();
 }
 
 void Plater::reload_all_from_disk()
@@ -6172,8 +6384,7 @@ void Plater::sys_color_changed()
     p->preview->sys_color_changed();
     p->sidebar->sys_color_changed();
 
-    // msw_rescale_menu updates just icons, so use it
-    p->menus.msw_rescale();
+    p->menus.sys_color_changed();
 
     Layout();
     GetParent()->Layout();
@@ -6338,6 +6549,7 @@ bool Plater::can_copy_to_clipboard() const
 bool Plater::can_undo() const { return p->undo_redo_stack().has_undo_snapshot(); }
 bool Plater::can_redo() const { return p->undo_redo_stack().has_redo_snapshot(); }
 bool Plater::can_reload_from_disk() const { return p->can_reload_from_disk(); }
+bool Plater::can_replace_with_stl() const { return p->can_replace_with_stl(); }
 bool Plater::can_mirror() const { return p->can_mirror(); }
 bool Plater::can_split(bool to_objects) const { return p->can_split(to_objects); }
 const UndoRedo::Stack& Plater::undo_redo_stack_main() const { return p->undo_redo_stack_main(); }

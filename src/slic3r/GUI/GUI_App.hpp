@@ -20,7 +20,8 @@
 class wxMenuItem;
 class wxMenuBar;
 class wxTopLevelWindow;
-class wxNotebook;
+class wxDataViewCtrl;
+class wxBookCtrlBase;
 struct wxLanguageInfo;
 
 namespace Slic3r {
@@ -118,6 +119,14 @@ private:
     wxColour        m_color_label_modified;
     wxColour        m_color_label_sys;
     wxColour        m_color_label_default;
+    wxColour        m_color_window_default;
+#ifdef _WIN32
+    wxColour        m_color_highlight_label_default;
+    wxColour        m_color_hovered_btn_label;
+    wxColour        m_color_highlight_default;
+    wxColour        m_color_selected_btn_bg;
+    bool            m_force_colors_update { false };
+#endif
 
     wxFont		    m_small_font;
     wxFont		    m_bold_font;
@@ -170,6 +179,14 @@ public:
     void            init_label_colours();
     void            update_label_colours_from_appconfig();
     void            update_label_colours();
+    // update color mode for window
+    void            UpdateDarkUI(wxWindow *window, bool highlited = false, bool just_font = false);
+    // update color mode for whole dialog including all children
+    void            UpdateDlgDarkUI(wxDialog* dlg);
+    // update color mode for DataViewControl
+    void            UpdateDVCDarkUI(wxDataViewCtrl* dvc, bool highlited = false);
+    // update color mode for panel including all static texts controls
+    void            UpdateAllStaticTextDarkUI(wxWindow* parent);
     void            init_fonts();
 	void            update_fonts(const MainFrame *main_frame = nullptr);
     void            set_label_clr_modified(const wxColour& clr);
@@ -178,12 +195,23 @@ public:
     const wxColour& get_label_clr_modified(){ return m_color_label_modified; }
     const wxColour& get_label_clr_sys()     { return m_color_label_sys; }
     const wxColour& get_label_clr_default() { return m_color_label_default; }
+    const wxColour& get_window_default_clr(){ return m_color_window_default; }
+
+
+#ifdef _WIN32
+    const wxColour& get_label_highlight_clr()   { return m_color_highlight_label_default; }
+    const wxColour& get_highlight_default_clr() { return m_color_highlight_default; }
+    const wxColour& get_color_hovered_btn_label() { return m_color_hovered_btn_label; }
+    const wxColour& get_color_selected_btn_bg() { return m_color_selected_btn_bg; }
+    void            force_colors_update();
+#endif
 
     const wxFont&   small_font()            { return m_small_font; }
     const wxFont&   bold_font()             { return m_bold_font; }
     const wxFont&   normal_font()           { return m_normal_font; }
     const wxFont&   code_font()             { return m_code_font; }
     int             em_unit() const         { return m_em_unit; }
+    bool            tabs_as_menu() const;
     wxSize          get_min_size() const;
     float           toolbar_icon_scale(const bool is_limited = false) const;
     void            set_auto_toolbar_icon_scale(float scale) const;
@@ -199,7 +227,7 @@ public:
     static bool     catch_error(std::function<void()> cb, const std::string& err);
 
     void            persist_window_geometry(wxTopLevelWindow *window, bool default_maximized = false);
-    void            update_ui_from_settings(bool apply_free_camera_correction = true);
+    void            update_ui_from_settings();
 
     bool            switch_language();
     bool            load_language(wxString language, bool initial);
@@ -246,7 +274,7 @@ public:
     NotificationManager* notification_manager();
 
     // Parameters extracted from the command line to be passed to GUI after initialization.
-    const GUI_InitParams* init_params { nullptr };
+    GUI_InitParams* init_params { nullptr };
 
     AppConfig*      app_config{ nullptr };
     PresetBundle*   preset_bundle{ nullptr };
@@ -254,9 +282,9 @@ public:
     MainFrame*      mainframe{ nullptr };
     Plater*         plater_{ nullptr };
 
-	PresetUpdater* get_preset_updater() { return preset_updater; }
+	PresetUpdater*  get_preset_updater() { return preset_updater; }
 
-    wxNotebook*     tab_panel() const ;
+    wxBookCtrlBase* tab_panel() const ;
     int             extruders_cnt() const;
     int             extruders_edited_cnt() const;
 

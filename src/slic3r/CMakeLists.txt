@@ -91,6 +91,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Plater.hpp
     GUI/PresetComboBoxes.hpp
     GUI/PresetComboBoxes.cpp
+    GUI/BitmapComboBox.hpp
+    GUI/BitmapComboBox.cpp
     GUI/SavePresetDialog.hpp
     GUI/SavePresetDialog.cpp
     GUI/PhysicalPrinterDialog.hpp
@@ -179,6 +181,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Mouse3DController.hpp
     GUI/DoubleSlider.cpp
     GUI/DoubleSlider.hpp
+    GUI/Notebook.cpp
+    GUI/Notebook.hpp
     GUI/ObjectDataViewModel.cpp
     GUI/ObjectDataViewModel.hpp
     GUI/InstanceCheck.cpp

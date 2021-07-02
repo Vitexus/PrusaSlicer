@@ -7,6 +7,7 @@
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "Plater.hpp"
+#include "BitmapComboBox.hpp"
 #if ENABLE_PROJECT_DIRTY_STATE
 #include "MainFrame.hpp"
 #endif // ENABLE_PROJECT_DIRTY_STATE
@@ -21,6 +22,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include <wx/progdlg.h>
+#include <wx/listbook.h>
 #include <wx/numformatter.h>
 
 #include "slic3r/Utils/FixModelByWin10.hpp"
@@ -65,8 +67,14 @@ static void take_snapshot(const wxString& snapshot_name)
 }
 
 ObjectList::ObjectList(wxWindow* parent) :
-    wxDataViewCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxDV_MULTIPLE)
+    wxDataViewCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, 
+#ifdef _WIN32
+        wxBORDER_SIMPLE | 
+#endif
+        wxDV_MULTIPLE)
 {
+    wxGetApp().UpdateDVCDarkUI(this, true);
+
     // create control
     create_objects_ctrl();
 
@@ -2201,9 +2209,9 @@ void ObjectList::part_selection_changed()
                 if (type == itInfo) {
                     InfoItemType info_type = m_objects_model->GetInfoItemType(item);
                     if (info_type != InfoItemType::VariableLayerHeight) {
-                        GLGizmosManager::EType gizmo_type =
-                            info_type == InfoItemType::CustomSupports ? GLGizmosManager::EType::FdmSupports
-                                                                      : GLGizmosManager::EType::Seam;
+                        GLGizmosManager::EType gizmo_type = info_type == InfoItemType::CustomSupports ? GLGizmosManager::EType::FdmSupports :
+                                                            info_type == InfoItemType::CustomSeam     ? GLGizmosManager::EType::Seam :
+                                                                                                        GLGizmosManager::EType::MmuSegmentation;
                         GLGizmosManager& gizmos_mgr = wxGetApp().plater()->canvas3D()->get_gizmos_manager();
                         if (gizmos_mgr.get_current_type() != gizmo_type)
                             gizmos_mgr.open_gizmo(gizmo_type);
@@ -2333,6 +2341,7 @@ void ObjectList::update_info_items(size_t obj_idx)
 
     for (InfoItemType type : {InfoItemType::CustomSupports,
                               InfoItemType::CustomSeam,
+                              InfoItemType::MmuSegmentation,
                               InfoItemType::VariableLayerHeight}) {
         wxDataViewItem item = m_objects_model->GetInfoItemByType(item_obj, type);
         bool shows = item.IsOk();
@@ -2341,12 +2350,13 @@ void ObjectList::update_info_items(size_t obj_idx)
         switch (type) {
         case InfoItemType::CustomSupports :
         case InfoItemType::CustomSeam :
+        case InfoItemType::MmuSegmentation :
             should_show = printer_technology() == ptFFF
                        && std::any_of(model_object->volumes.begin(), model_object->volumes.end(),
-                                      [type](const ModelVolume* mv) {
-                                          return ! (type == InfoItemType::CustomSupports
-                                                          ? mv->supported_facets.empty()
-                                                          : mv->seam_facets.empty());
+                                      [type](const ModelVolume *mv) {
+                                          return !(type == InfoItemType::CustomSupports ? mv->supported_facets.empty() :
+                                                   type == InfoItemType::CustomSeam     ? mv->seam_facets.empty() :
+                                                                                          mv->mmu_segmentation_facets.empty());
                                       });
             break;
 
@@ -3787,10 +3797,9 @@ void ObjectList::msw_rescale()
 
 void ObjectList::sys_color_changed()
 {
-    // update existing items with bitmaps
-    m_objects_model->Rescale();
+    wxGetApp().UpdateDVCDarkUI(this, true);
 
-    Layout();
+    msw_rescale();
 }
 
 void ObjectList::ItemValueChanged(wxDataViewEvent &event)
@@ -3886,6 +3895,9 @@ wxDataViewItemArray ObjectList::reorder_volumes_and_get_selection(int obj_idx, s
     wxDataViewItemArray items;
 
     ModelObject* object = (*m_objects)[obj_idx];
+    if (object->volumes.size() <= 1)
+        return items;
+
     object->sort_volumes(wxGetApp().app_config->get("order_volumes") == "1");
 
     wxDataViewItem object_item = m_objects_model->GetItemById(obj_idx);

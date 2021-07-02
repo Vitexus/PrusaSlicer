@@ -35,6 +35,7 @@
 #include "libslic3r/Format/3mf.hpp"
 #include "../GUI/GUI.hpp"
 #include "../GUI/I18N.hpp"
+#include "../GUI/MsgDialog.hpp"
 
 #include <wx/msgdlg.h>
 #include <wx/progdlg.h>
@@ -378,7 +379,8 @@ void fix_model_by_win10_sdk_gui(ModelObject &model_object, int volume_idx)
 	            // PresetBundle bundle;
 				on_progress(L("Loading repaired model"), 80);
 				DynamicPrintConfig config;
-				bool loaded = Slic3r::load_3mf(path_dst.string().c_str(), &config, &model, false);
+				ConfigSubstitutionContext config_substitutions{ ForwardCompatibilitySubstitutionRule::EnableSilent };
+				bool loaded = Slic3r::load_3mf(path_dst.string().c_str(), config, config_substitutions, &model, false);
 			    boost::filesystem::remove(path_dst);
 				if (! loaded)
 	 				throw Slic3r::RuntimeError(L("Import of the repaired 3mf file failed"));
@@ -421,10 +423,12 @@ void fix_model_by_win10_sdk_gui(ModelObject &model_object, int volume_idx)
 	if (canceled) {
 		// Nothing to show.
 	} else if (success) {
-		wxMessageDialog dlg(nullptr, _(L("Model repaired successfully")), _(L("Model Repair by the Netfabb service")), wxICON_INFORMATION | wxOK_DEFAULT);
+		//wxMessageDialog dlg(nullptr, _(L("Model repaired successfully")), _(L("Model Repair by the Netfabb service")), wxICON_INFORMATION | wxOK_DEFAULT);
+		Slic3r::GUI::MessageDialog dlg(nullptr, _(L("Model repaired successfully")), _(L("Model Repair by the Netfabb service")), wxICON_INFORMATION | wxOK_DEFAULT);
 		dlg.ShowModal();
 	} else {
-		wxMessageDialog dlg(nullptr, _(L("Model repair failed:")) + " \n" + _(progress.message), _(L("Model Repair by the Netfabb service")), wxICON_ERROR | wxOK_DEFAULT);
+		//wxMessageDialog dlg(nullptr, _(L("Model repair failed:")) + " \n" + _(progress.message), _(L("Model Repair by the Netfabb service")), wxICON_ERROR | wxOK_DEFAULT);
+		Slic3r::GUI::MessageDialog dlg(nullptr, _(L("Model repair failed:")) + " \n" + _(progress.message), _(L("Model Repair by the Netfabb service")), wxICON_ERROR | wxOK_DEFAULT);
 		dlg.ShowModal();
 	}
 	worker_thread.join();

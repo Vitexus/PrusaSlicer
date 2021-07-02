@@ -31,6 +31,7 @@
 #include "RemovableDriveManager.hpp"
 #include "BitmapCache.hpp"
 #include "BonjourDialog.hpp"
+#include "MsgDialog.hpp"
 
 namespace Slic3r {
 namespace GUI {
@@ -67,7 +68,8 @@ PresetForPrinter::PresetForPrinter(PhysicalPrinterDialog* parent, const std::str
             // update Print Host upload from the selected preset
             m_parent->get_printer()->update_from_preset(*preset);
             // update values in parent (PhysicalPrinterDialog)
-            m_parent->update();
+            m_parent->update(true);
+            
         }
 
         // update PrinterTechnology if it was changed
@@ -153,11 +155,13 @@ void PresetForPrinter::msw_rescale()
 
 PhysicalPrinterDialog::PhysicalPrinterDialog(wxWindow* parent, wxString printer_name) :
     DPIDialog(parent, wxID_ANY, _L("Physical Printer"), wxDefaultPosition, wxSize(45 * wxGetApp().em_unit(), -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
-    m_printer("", wxGetApp().preset_bundle->physical_printers.default_config())
+    m_printer("", wxGetApp().preset_bundle->physical_printers.default_config()),
+    had_all_mk3(!printer_name.empty())
 {
     SetFont(wxGetApp().normal_font());
+#ifndef _WIN32
     SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-
+#endif
     m_default_name = _L("Type here the name of your printer device");
     bool new_printer = true;
 
@@ -171,12 +175,13 @@ PhysicalPrinterDialog::PhysicalPrinterDialog(wxWindow* parent, wxString printer_
 
     wxStaticText* label_top = new wxStaticText(this, wxID_ANY, _L("Descriptive name for the printer") + ":");
 
-    m_add_preset_btn = new ScalableButton(this, wxID_ANY, "add_copies", "", wxDefaultSize, wxDefaultPosition, /*wxBU_LEFT | */wxBU_EXACTFIT);
+    m_add_preset_btn = new ScalableButton(this, wxID_ANY, "add_copies", "", wxDefaultSize, wxDefaultPosition, wxBU_EXACTFIT);
     m_add_preset_btn->SetFont(wxGetApp().normal_font());
     m_add_preset_btn->SetToolTip(_L("Add preset for this printer device")); 
     m_add_preset_btn->Bind(wxEVT_BUTTON, &PhysicalPrinterDialog::AddPreset, this);
 
     m_printer_name    = new wxTextCtrl(this, wxID_ANY, printer_name, wxDefaultPosition, wxDefaultSize);
+    wxGetApp().UpdateDarkUI(m_printer_name);
     m_printer_name->Bind(wxEVT_TEXT, [this](wxEvent&) { this->update_full_printer_names(); });
 
     PhysicalPrinterCollection& printers = wxGetApp().preset_bundle->physical_printers;
@@ -207,7 +212,10 @@ PhysicalPrinterDialog::PhysicalPrinterDialog(wxWindow* parent, wxString printer_
 
     wxStdDialogButtonSizer* btns = this->CreateStdDialogButtonSizer(wxOK | wxCANCEL);
     wxButton* btnOK = static_cast<wxButton*>(this->FindWindowById(wxID_OK, this));
+    wxGetApp().UpdateDarkUI(btnOK);
     btnOK->Bind(wxEVT_BUTTON, &PhysicalPrinterDialog::OnOK, this);
+
+    wxGetApp().UpdateDarkUI(static_cast<wxButton*>(this->FindWindowById(wxID_CANCEL, this)));
 
     wxBoxSizer* nameSizer = new wxBoxSizer(wxHORIZONTAL);
     nameSizer->Add(m_printer_name, 1, wxEXPAND);
@@ -449,7 +457,7 @@ void PhysicalPrinterDialog::update_printhost_buttons()
     m_printhost_browse_btn->Enable(host->has_auto_discovery());
 }
 
-void PhysicalPrinterDialog::update()
+void PhysicalPrinterDialog::update(bool printer_change)
 {
     m_optgroup->reload_config();
 
@@ -457,13 +465,24 @@ void PhysicalPrinterDialog::update()
     // Only offer the host type selection for FFF, for SLA it's always the SL1 printer (at the moment)
     bool supports_multiple_printers = false;
     if (tech == ptFFF) {
-        m_optgroup->show_field("host_type");
-        m_optgroup->hide_field("printhost_authorization_type");
-        m_optgroup->show_field("printhost_apikey", true);
-        for (const std::string& opt_key : std::vector<std::string>{ "printhost_user", "printhost_password" })
-            m_optgroup->hide_field(opt_key);
+        update_host_type(printer_change);
         const auto opt = m_config->option<ConfigOptionEnum<PrintHostType>>("host_type");
-        supports_multiple_printers = opt && opt->value == htRepetier;
+        m_optgroup->show_field("host_type");
+        if (opt->value == htPrusaLink)
+        {
+            m_optgroup->show_field("printhost_authorization_type");
+            AuthorizationType auth_type = m_config->option<ConfigOptionEnum<AuthorizationType>>("printhost_authorization_type")->value;
+            m_optgroup->show_field("printhost_apikey", auth_type == AuthorizationType::atKeyPassword);
+            for (const char* opt_key : { "printhost_user", "printhost_password" })
+                m_optgroup->show_field(opt_key, auth_type == AuthorizationType::atUserPassword);
+        } else {
+            m_optgroup->hide_field("printhost_authorization_type");
+            m_optgroup->show_field("printhost_apikey", true);
+            for (const std::string& opt_key : std::vector<std::string>{ "printhost_user", "printhost_password" })
+                m_optgroup->hide_field(opt_key);
+            supports_multiple_printers = opt && opt->value == htRepetier;
+        }
+        
     }
     else {
         m_optgroup->set_value("host_type", int(PrintHostType::htOctoPrint), false);
@@ -485,6 +504,57 @@ void PhysicalPrinterDialog::update()
 
     this->SetSize(this->GetBestSize());
     this->Layout();
+}
+
+void PhysicalPrinterDialog::update_host_type(bool printer_change)
+{
+    if (m_presets.empty())
+        return;
+    bool all_presets_are_from_mk3_family = true;
+
+    for (PresetForPrinter* prstft : m_presets) {
+        std::string preset_name = prstft->get_preset_name();
+        if (Preset* preset = wxGetApp().preset_bundle->printers.find_preset(preset_name)) {
+            std::string model_id = preset->config.opt_string("printer_model");
+            if (preset->vendor && preset->vendor->name == "Prusa Research") {
+                const std::vector<VendorProfile::PrinterModel>& models = preset->vendor->models;
+                auto it = std::find_if(models.begin(), models.end(),
+                    [model_id](const VendorProfile::PrinterModel& model) { return model.id == model_id; });
+                if (it != models.end() && it->family == "MK3")
+                    continue;
+            } else if (!preset->vendor && model_id.rfind("MK3", 0) == 0) {
+                continue;
+            }
+            
+        }
+        all_presets_are_from_mk3_family = false;
+        break;
+    }
+
+    Field* ht = m_optgroup->get_field("host_type");
+
+    wxArrayString types;
+    // Append localized enum_labels
+    assert(ht->m_opt.enum_labels.size() == ht->m_opt.enum_values.size());
+    for (size_t i = 0; i < ht->m_opt.enum_labels.size(); i++) {
+        if (ht->m_opt.enum_values[i] == "prusalink" && !all_presets_are_from_mk3_family)
+            continue;
+        types.Add(_(ht->m_opt.enum_labels[i]));
+    }
+
+    Choice* choice = dynamic_cast<Choice*>(ht);
+    choice->set_values(types);
+    auto set_to_choice_and_config = [this, choice](PrintHostType type) {
+        choice->set_value(static_cast<int>(type));
+        m_config->set_key_value("host_type", new ConfigOptionEnum<PrintHostType>(type));
+    };
+    if ((printer_change && all_presets_are_from_mk3_family) || (!had_all_mk3 && all_presets_are_from_mk3_family))
+        set_to_choice_and_config(htPrusaLink);  
+    else if ((printer_change && !all_presets_are_from_mk3_family) || (!all_presets_are_from_mk3_family && m_config->option<ConfigOptionEnum<PrintHostType>>("host_type")->value == htPrusaLink))
+        set_to_choice_and_config(htOctoPrint);
+    else
+        choice->set_value(m_config->option("host_type")->getInt());
+    had_all_mk3 = all_presets_are_from_mk3_family;
 }
 
 
@@ -554,7 +624,8 @@ void PhysicalPrinterDialog::OnOK(wxEvent& event)
     {
         wxString msg_text = from_u8((boost::format(_u8L("Printer with name \"%1%\" already exists.")) % existing->name/*printer_name*/).str());
         msg_text += "\n" + _L("Replace?");
-        wxMessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxYES | wxNO);
+        //wxMessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxYES | wxNO);
+        MessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxYES | wxNO);
 
         if (dialog.ShowModal() == wxID_NO)
             return;
@@ -583,7 +654,8 @@ void PhysicalPrinterDialog::OnOK(wxEvent& event)
                                                    "The above preset for printer \"%2%\" will be used just once.",
                                                    "Following printer presets are duplicated:%1%"
                                                    "The above presets for printer \"%2%\" will be used just once.", repeat_cnt), repeatable_presets, printer_name);
-        wxMessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxOK | wxCANCEL);
+        //wxMessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxOK | wxCANCEL);
+        MessageDialog dialog(nullptr, msg_text, _L("Warning"), wxICON_WARNING | wxOK | wxCANCEL);
         if (dialog.ShowModal() == wxID_CANCEL)
             return;
     }
@@ -620,15 +692,17 @@ void PhysicalPrinterDialog::AddPreset(wxEvent& event)
 
     m_presets_sizer->Add(m_presets.back()->sizer(), 1, wxEXPAND | wxTOP, BORDER_W);
     update_full_printer_names();
-
     this->Fit();
+
+    update_host_type(true);
 }
 
 void PhysicalPrinterDialog::DeletePreset(PresetForPrinter* preset_for_printer)
 {
     if (m_presets.size() == 1) {
         wxString msg_text = _L("It's not possible to delete the last related preset for the printer.");
-        wxMessageDialog dialog(nullptr, msg_text, _L("Information"), wxICON_INFORMATION | wxOK);
+        //wxMessageDialog dialog(nullptr, msg_text, _L("Information"), wxICON_INFORMATION | wxOK);
+        MessageDialog dialog(nullptr, msg_text, _L("Information"), wxICON_INFORMATION | wxOK);
         dialog.ShowModal();
         return;
     }
@@ -648,7 +722,8 @@ void PhysicalPrinterDialog::DeletePreset(PresetForPrinter* preset_for_printer)
 
     this->Layout();
     this->Fit();
-}
 
+    update_host_type(true);
+}
 
 }}    // namespace Slic3r::GUI

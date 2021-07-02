@@ -2,6 +2,7 @@
 #define slic3r_Model_hpp_
 
 #include "libslic3r.h"
+#include "enum_bitmask.hpp"
 #include "Geometry.hpp"
 #include "ObjectID.hpp"
 #include "Point.hpp"
@@ -12,6 +13,7 @@
 #include "TriangleMesh.hpp"
 #include "Arrange.hpp"
 #include "CustomGCode.hpp"
+#include "enum_bitmask.hpp"
 
 #include <map>
 #include <memory>
@@ -226,6 +228,10 @@ enum class ModelVolumeType : int {
     SUPPORT_ENFORCER,
 };
 
+enum class ModelObjectCutAttribute : int { KeepUpper, KeepLower, FlipLower }; 
+using ModelObjectCutAttributes = enum_bitmask<ModelObjectCutAttribute>;
+ENABLE_ENUM_BITMASK_OPERATORS(ModelObjectCutAttribute);
+
 // A printable object, possibly having multiple print volumes (each with its own set of parameters and materials),
 // and possibly having multiple modifier volumes, each modifier volume with its set of parameters and materials.
 // Each ModelObject may be instantiated mutliple times, each instance having different placement on the print bed,
@@ -344,7 +350,7 @@ public:
     size_t materials_count() const;
     size_t facets_count() const;
     bool needed_repair() const;
-    ModelObjectPtrs cut(size_t instance, coordf_t z, bool keep_upper = true, bool keep_lower = true, bool rotate_lower = false);    // Note: z is in world coordinates
+    ModelObjectPtrs cut(size_t instance, coordf_t z, ModelObjectCutAttributes attributes);
     void split(ModelObjectPtrs* new_objects);
     void merge();
     // Support for non-uniform scaling of instances. If an instance is rotated by angles, which are not multiples of ninety degrees,
@@ -512,13 +518,21 @@ public:
     // Assign the content if the timestamp differs, don't assign an ObjectID.
     void assign(const FacetsAnnotation& rhs) { if (! this->timestamp_matches(rhs)) { m_data = rhs.m_data; this->copy_timestamp(rhs); } }
     void assign(FacetsAnnotation&& rhs) { if (! this->timestamp_matches(rhs)) { m_data = std::move(rhs.m_data); this->copy_timestamp(rhs); } }
-    const std::map<int, std::vector<bool>>& get_data() const throw() { return m_data; }
+    const std::pair<std::vector<std::pair<int, int>>, std::vector<bool>>& get_data() const throw() { return m_data; }
     bool set(const TriangleSelector& selector);
     indexed_triangle_set get_facets(const ModelVolume& mv, EnforcerBlockerType type) const;
-    bool empty() const { return m_data.empty(); }
+    bool empty() const { return m_data.first.empty(); }
     void clear();
+
+    // Serialize triangle into string, for serialization into 3MF/AMF.
     std::string get_triangle_as_string(int i) const;
+
+    // Before deserialization, reserve space for n_triangles.
+    void reserve(int n_triangles) { m_data.first.reserve(n_triangles); }
+    // Deserialize triangles one by one, with strictly increasing triangle_id.
     void set_triangle_from_string(int triangle_id, const std::string& str);
+    // After deserializing the last triangle, shrink data to fit.
+    void shrink_to_fit() { m_data.first.shrink_to_fit(); m_data.second.shrink_to_fit(); }
 
 private:
     // Constructors to be only called by derived classes.
@@ -544,7 +558,7 @@ private:
         ar(cereal::base_class<ObjectWithTimestamp>(this), m_data);
     }
 
-    std::map<int, std::vector<bool>> m_data;
+    std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> m_data;
 
     // To access set_new_unique_id() when copy / pasting a ModelVolume.
     friend class ModelVolume;
@@ -1023,8 +1037,20 @@ public:
 
     OBJECTBASE_DERIVED_COPY_MOVE_CLONE(Model)
 
-    static Model read_from_file(const std::string& input_file, DynamicPrintConfig* config = nullptr, bool add_default_instances = true, bool check_version = false);
-    static Model read_from_archive(const std::string& input_file, DynamicPrintConfig* config, bool add_default_instances = true, bool check_version = false);
+    enum class LoadAttribute : int {
+        AddDefaultInstances,
+        CheckVersion
+    };
+    using LoadAttributes = enum_bitmask<LoadAttribute>;
+
+    static Model read_from_file(
+        const std::string& input_file, 
+        DynamicPrintConfig* config = nullptr, ConfigSubstitutionContext* config_substitutions = nullptr,
+        LoadAttributes options = LoadAttribute::AddDefaultInstances);
+    static Model read_from_archive(
+        const std::string& input_file, 
+        DynamicPrintConfig* config, ConfigSubstitutionContext* config_substitutions,
+        LoadAttributes options = LoadAttribute::AddDefaultInstances);
 
     // Add a new ModelObject to this Model, generate a new ID for this ModelObject.
     ModelObject* add_object();
@@ -1088,6 +1114,8 @@ private:
 		ar(materials, objects, wipe_tower_wrapper);
     }
 };
+
+ENABLE_ENUM_BITMASK_OPERATORS(Model::LoadAttribute)
 
 #undef OBJECTBASE_DERIVED_COPY_MOVE_CLONE
 #undef OBJECTBASE_DERIVED_PRIVATE_COPY_MOVE

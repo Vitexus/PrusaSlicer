@@ -1,6 +1,7 @@
 #include "Exception.hpp"
 #include "MeshBoolean.hpp"
 #include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/TryCatchSignal.hpp"
 #undef PI
 
 // Include igl first. It defines "L" macro which then clashes with our localization
@@ -207,13 +208,19 @@ static bool _cgal_intersection(CGALMesh &A, CGALMesh &B, CGALMesh &R)
 template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
 {
     bool success = false;
+    bool hw_fail = false;
     try {
         CGALMesh result;
-        success = op(A, B, result);
+        try_catch_signal({SIGSEGV, SIGFPE}, [&success, &A, &B, &result, &op] {
+            success = op(A, B, result);
+        }, [&] { hw_fail = true; });
         A = std::move(result);      // In-place operation does not work
     } catch (...) {
         success = false;
     }
+
+    if (hw_fail)
+        throw Slic3r::HardCrash("CGAL mesh boolean operation crashed.");
 
     if (! success)
         throw Slic3r::RuntimeError("CGAL mesh boolean operation failed.");
@@ -263,6 +270,11 @@ bool does_self_intersect(const TriangleMesh &mesh)
 }
 
 void CGALMeshDeleter::operator()(CGALMesh *ptr) { delete ptr; }
+
+bool does_bound_a_volume(const CGALMesh &mesh)
+{
+    return CGALProc::does_bound_a_volume(mesh.m);
+}
 
 } // namespace cgal
 
